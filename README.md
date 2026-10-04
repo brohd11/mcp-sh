@@ -13,6 +13,7 @@ config embedded:
 | Blender | [mcp-sh-blender](https://github.com/brohd11/mcp-sh-blender) | `uvx blender-mcp` + Python script commands |
 | Roblox Studio | [mcp-sh-roblox](https://github.com/brohd11/mcp-sh-roblox) | Studio's built-in MCP server + Luau editing commands |
 | GIMP | [mcp-sh-gimp](https://github.com/brohd11/mcp-sh-gimp) | its own plug-in (native host) + Python script commands |
+| Krita | [mcp-sh-krita](https://github.com/brohd11/mcp-sh-krita) | its own plug-in (native host) + Python script commands |
 | Godot | [mcp-sh-godot](https://github.com/brohd11/mcp-sh-godot) | its own editor addon (native host) |
 
 An app's **config** decides what the shell talks to:
