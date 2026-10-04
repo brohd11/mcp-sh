@@ -2,6 +2,7 @@ package profile_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -238,7 +239,7 @@ func TestImport(t *testing.T) {
 	write(t, filepath.Join(home, ".claude.json"), `{
 		"numStartups": 3,
 		"mcpServers": {"blender": {"type": "stdio", "command": "uvx", "args": ["blender-mcp"]}},
-		"projects": {"`+project+`": {"mcpServers": {"local-srv": {"type": "http", "url": "http://x/mcp", "headers": {"A": "b"}}}}}
+		"projects": {"`+filepath.ToSlash(project)+`": {"mcpServers": {"local-srv": {"type": "http", "url": "http://x/mcp", "headers": {"A": "b"}}}}}
 	}`)
 	sources := profile.ImportSources(project, home)
 	if len(sources) != 3 {
@@ -253,5 +254,86 @@ func TestImport(t *testing.T) {
 	}
 	if _, _, err := profile.FindImport(sources, "nope"); err == nil || !strings.Contains(err.Error(), "found: [blender local-srv proj-srv]") {
 		t.Fatalf("missing: %v", err)
+	}
+}
+
+func TestCommandDirs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
+	t.Setenv("TOOLS", "/opt/tools")
+	o := opts(t)
+	userDir := filepath.Dir(profile.UserConfigPath("blender", o))
+	write(t, profile.UserConfigPath("blender", o), `{"commandDirs": ["~/rbx", "${TOOLS}/blender", "mine", "~/rbx/../rbx"]}`)
+	write(t, profile.ProjectConfigPath("blender", o), `{"commandDirs": ["../tools/commands"]}`)
+	l, err := profile.Load(blender, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type dir struct {
+		label    string
+		required bool
+	}
+	var got []dir
+	for _, d := range l.CommandDirs {
+		got = append(got, dir{d.Label, d.Required})
+	}
+	want := []dir{
+		{"built-in blender commands", false},
+		{filepath.Join(userDir, "commands"), false},
+		{filepath.Join(home, "rbx"), true}, // its duplicate, ~/rbx/../rbx, is dropped
+		{"/opt/tools/blender", true},
+		{filepath.Join(userDir, "mine"), true},
+		{filepath.Join(o.ProjectDir, ".agent-shell", "blender", "commands"), false},
+		{filepath.Join(o.ProjectDir, "tools", "commands"), true},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("command dirs:\n%v\nwant:\n%v", got, want)
+	}
+	if strings.Join(l.Raw.CommandDirs, ",") != "~/rbx,${TOOLS}/blender,mine,~/rbx/../rbx,../tools/commands" {
+		t.Errorf("raw: %v", l.Raw.CommandDirs)
+	}
+	if len(l.Layers[1].ExtraCommandDirs) != 4 || len(l.Layers[2].ExtraCommandDirs) != 1 {
+		t.Errorf("layers: %+v", l.Layers)
+	}
+
+	builtin := profile.App{Name: "x", FS: fstest.MapFS{"config.json": {Data: []byte(`{"commandDirs": ["/a"]}`)}}}
+	if _, err := profile.Load(builtin, opts(t)); err == nil || !strings.Contains(err.Error(), "commandDirs is for user and project configs") {
+		t.Errorf("built-in commandDirs: %v", err)
+	}
+	o = opts(t)
+	write(t, profile.UserConfigPath("blender", o), `{"commandDirs": [" "]}`)
+	if _, err := profile.Load(blender, o); err == nil || !strings.Contains(err.Error(), "empty entry") {
+		t.Errorf("empty entry: %v", err)
+	}
+}
+
+func TestEditCommandDirs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	write(t, path, `{"timeout": 9, "futureKey": true}`)
+	if err := profile.AddCommandDir(path, "~/a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.AddCommandDir(path, "/b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.AddCommandDir(path, "/b"); err == nil || !strings.Contains(err.Error(), "already") {
+		t.Fatalf("duplicate: %v", err)
+	}
+	if err := profile.RemoveCommandDir(path, "~/a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.RemoveCommandDir(path, "/c"); err == nil || !strings.Contains(err.Error(), "commandDirs: /b") {
+		t.Fatalf("missing entry: %v", err)
+	}
+	var m map[string]any
+	b, _ := os.ReadFile(path)
+	json.Unmarshal(b, &m)
+	if m["futureKey"] != true || m["timeout"] != float64(9) || len(m["commandDirs"].([]any)) != 1 {
+		t.Fatalf("file: %s", b)
+	}
+	profile.RemoveCommandDir(path, "/b")
+	if b, _ := os.ReadFile(path); strings.Contains(string(b), "commandDirs") {
+		t.Fatalf("empty list kept: %s", b)
 	}
 }

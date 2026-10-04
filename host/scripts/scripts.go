@@ -74,6 +74,9 @@ type Binding struct {
 type Dir struct {
 	Label string // shown in help, e.g. "~/.agent-shell/blender/commands"
 	FS    fs.FS
+	// Required marks a folder the user named explicitly (commandDirs): a missing one is
+	// reported in the source label instead of being skipped silently.
+	Required bool
 }
 
 type Source struct {
@@ -84,6 +87,15 @@ type Source struct {
 var _ host.Source = (*Source)(nil)
 
 func (s *Source) Label() string {
+	var missing []string
+	for _, d := range s.Dirs {
+		if _, err := fs.Stat(d.FS, "."); d.Required && err != nil {
+			missing = append(missing, d.Label)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Sprintf("script commands (%d folders, missing: %s)", len(s.Dirs), strings.Join(missing, ", "))
+	}
 	return fmt.Sprintf("script commands (%d folders)", len(s.Dirs))
 }
 
@@ -92,6 +104,7 @@ type script struct {
 	dir        Dir
 	lang       Lang
 	header     header
+	overrides  *Dir // the earlier folder whose script of the same name this one replaces
 }
 
 type header struct {
@@ -123,7 +136,11 @@ func (s *Source) Commands(ctx context.Context) ([]engine.Command, error) {
 				continue
 			}
 			name := strings.TrimSuffix(e.Name(), lang.Ext)
-			found[name] = script{name: name, file: e.Name(), dir: d, lang: lang, header: parseHeader(string(body), lang.Comment)}
+			sc := script{name: name, file: e.Name(), dir: d, lang: lang, header: parseHeader(string(body), lang.Comment)}
+			if prev, ok := found[name]; ok {
+				sc.overrides = &prev.dir
+			}
+			found[name] = sc
 		}
 	}
 	names := make([]string, 0, len(found))
@@ -178,7 +195,13 @@ func (s *Source) command(sc script) engine.Command {
 	} else {
 		help += summary + "\n"
 	}
-	help += fmt.Sprintf("(script %s in %s; %s)", sc.file, sc.dir.Label, via)
+	where := fmt.Sprintf("script %s in %s", sc.file, sc.dir.Label)
+	if sc.overrides != nil {
+		note := "overrides the one in " + sc.overrides.Label
+		summary += " (" + note + ")"
+		where += "; " + note
+	}
+	help += fmt.Sprintf("(%s; %s)", where, via)
 	return engine.Command{
 		Name:    sc.name,
 		Summary: summary,

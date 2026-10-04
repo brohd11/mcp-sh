@@ -66,9 +66,14 @@ func TestScriptCommands(t *testing.T) {
 	sh := newShell(t, src)
 
 	res := sh.Run(context.Background(), `help | grep -E '^  (objects|pick|boom|notes)'`, 0)
-	want := "  boom     script command\n  objects  list objects\n  pick     user pick\n"
+	want := "  boom     script command\n  objects  list objects\n  pick     user pick (overrides the one in built-in)\n"
 	if res.Stdout != want {
 		t.Fatalf("list: got %q want %q", res.Stdout, want)
+	}
+
+	res = sh.Run(context.Background(), `help pick`, 0)
+	if !strings.Contains(res.Stdout, "(script pick.py in user; overrides the one in built-in; runs via blender execute_blender_code)") {
+		t.Fatalf("override help: %q", res.Stdout)
 	}
 
 	res = sh.Run(context.Background(), `help objects`, 0)
@@ -91,11 +96,27 @@ func TestScriptCommands(t *testing.T) {
 	// Edits apply on the next run.
 	os.WriteFile(filepath.Join(userDir, "pick.py"), []byte("# summary: edited\nprint(3)\n"), 0o644)
 	res = sh.Run(context.Background(), `help | grep '^  pick'; pick`, 0)
-	if res.Stdout != "  pick     edited\nran execute_blender_code\n" {
+	if res.Stdout != "  pick     edited (overrides the one in built-in)\nran execute_blender_code\n" {
 		t.Fatalf("edited: %q", res.Stdout)
 	}
 	if last := exec.codes[len(exec.codes)-1]; !strings.HasSuffix(last, "print(3)\n") {
 		t.Fatalf("stale body sent: %q", last)
+	}
+}
+
+func TestMissingFolders(t *testing.T) {
+	gone := filepath.Join(t.TempDir(), "gone")
+	src := &scripts.Source{Dirs: []scripts.Dir{
+		{Label: "default", FS: os.DirFS(filepath.Join(t.TempDir(), "not-created"))},
+		{Label: gone, FS: os.DirFS(gone), Required: true},
+		{Label: "present", FS: fstest.MapFS{"a.py": {Data: []byte("print(1)\n")}}, Required: true},
+	}}
+	if got := src.Label(); got != "script commands (3 folders, missing: "+gone+")" {
+		t.Fatalf("label: %q", got)
+	}
+	src.Dirs = src.Dirs[2:]
+	if got := src.Label(); got != "script commands (1 folders)" {
+		t.Fatalf("label: %q", got)
 	}
 }
 

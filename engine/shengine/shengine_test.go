@@ -122,6 +122,10 @@ func TestFileAccessDisabled(t *testing.T) {
 	if r := run(t, shengine.Options{}, `echo hi >/dev/null; cd / && pwd`); r.out != "/\n" || r.code != 0 {
 		t.Errorf("devnull/cd: got %+v", r)
 	}
+	// pwd prints the virtual directory; -P never resolves on the real filesystem.
+	if r := run(t, shengine.Options{}, `pwd -P; pwd -x`); r.out != "/\n" || r.code != 2 {
+		t.Errorf("pwd flags: got %+v", r)
+	}
 }
 
 func TestRootJail(t *testing.T) {

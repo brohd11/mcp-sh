@@ -12,7 +12,7 @@ config embedded:
 |---|---|---|
 | Blender | [blender-shell](https://github.com/brohd11/blender-shell) | `uvx blender-mcp` + Python script commands |
 | Roblox Studio | [roblox-shell](https://github.com/brohd11/roblox-shell) | Studio's built-in MCP server + Luau editing commands |
-| Godot | [godot-shell](https://github.com/brohd11/godot-shell) | the editor_console bridge (native host) |
+| Godot | [godot-shell](https://github.com/brohd11/godot-shell) | its own editor addon (native host) |
 
 An app's **config** decides what the shell talks to:
 
@@ -59,6 +59,7 @@ func main() {
 		UpdateRepo: "brohd11/roblox-shell",  // enables `update` via GitHub releases
 		FS:         appFS,
 		// Builtins: Go-side commands, which win over every other command source.
+		// Subcommands: extra CLI verbs, e.g. godot-shell's `addon install`.
 	})
 }
 ```
@@ -121,6 +122,7 @@ The format is `.mcp.json`'s `mcpServers` plus agent-shell keys:
     },
     "remote": { "type": "http", "url": "http://localhost:8000/mcp", "headers": {} }
   },
+  "commandDirs": ["~/code/my-commands"],
   "root": "",
   "timeout": 120,
   "maxOutput": 65536
@@ -194,14 +196,36 @@ are the file's plus one for Python.
 
 A file named `_lib.luau` (or `_lib.py`) in a commands folder is shared code rather than a
 command. Every script of that language gets it, as a `lib` table in Luau. Libraries from all
-layers are combined in order, so a user folder can add helpers. `exec.errorTrim` (a
+folders are combined in order, so your folders can add helpers. `exec.errorTrim` (a
 regexp) strips noise from error text, such as Studio's internal `file:line:` prefixes.
 
 The leading comment block is the command's help, and `summary:` is its one-line
 summary. `server: NAME` picks the server when several run the same language. Files are
-re-read on every run, so edits apply immediately. A user or project file with the same
-name overrides the built-in one. Names that are bash keywords (`select`, `time`, ...)
-are hidden by bash; the listing says so, and `host NAME` runs them.
+re-read on every run, so edits apply immediately. Names that are bash keywords (`select`,
+`time`, ...) are hidden by bash; the listing says so, and `host NAME` runs them.
+
+### Your own command folders
+
+Keep your own commands wherever suits you, such as a git repo, and point the app at it:
+
+```sh
+roblox-shell commands add ~/code/roblox-tools             # user config
+roblox-shell commands add ./tools/roblox --project        # this project's config
+roblox-shell commands remove ~/code/roblox-tools
+```
+
+That edits `commandDirs` in the config. Entries expand `${VAR}` and `~/`, and a relative
+entry is relative to the config file's folder. Folders are searched in this order, later
+ones winning when two scripts share a name:
+
+1. the built-in `commands/`
+2. `~/.agent-shell/<app>/commands/`, then the user config's `commandDirs`
+3. `./.agent-shell/<app>/commands/`, then the project config's `commandDirs`
+
+A script that replaces one from an earlier folder still works, but its listing says so:
+`query  my query (overrides the one in built-in roblox commands)`. A `commandDirs` folder
+that doesn't exist is reported in the `commands` source list (`missing: ...`) and in
+`config path`.
 
 ## Native hosts
 
@@ -225,8 +249,7 @@ one JSON line back.
 - Invokes to one host are serialized.
 
 `hosttest/` is a complete host in about 100 lines. The Godot implementation is
-`addons/editor_console/src/bridge/console_bridge.gd`; it still answers the older
-`godot-editor-console-mcp` requests too.
+godot-shell's `addon/godot_shell/bridge.gd`.
 
 ## Sandbox and trust model
 

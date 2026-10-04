@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/brohd11/agent-shell/host/mcphost"
 	"github.com/brohd11/agent-shell/host/scripts"
@@ -46,6 +47,11 @@ type Profile struct {
 
 	Host       *Host              `json:"host,omitempty"`
 	MCPServers map[string]*Server `json:"mcpServers,omitempty"`
+
+	// CommandDirs are extra folders of script commands (user and project configs only).
+	// ${VAR} and a leading ~/ expand; relative paths are relative to the config file's
+	// folder. Entries from every layer stack.
+	CommandDirs []string `json:"commandDirs,omitempty"`
 
 	Root      string `json:"root,omitempty"`      // directory exposed to scripts as "/"; empty: no file access
 	Timeout   int    `json:"timeout,omitempty"`   // default script timeout, seconds
@@ -93,6 +99,8 @@ type Layer struct {
 	Path        string // file path ("built-in:config.json" for embedded)
 	Exists      bool
 	CommandsDir string // folder of script commands for this layer
+	// ExtraCommandDirs are this layer's commandDirs, resolved (set by Load).
+	ExtraCommandDirs []string
 }
 
 // Loaded is an app's config after layering.
@@ -183,7 +191,8 @@ func Load(app App, o Options) (*Loaded, error) {
 		return nil, fmt.Errorf("no config for %s: expected %s", app.Name, layers[1].Path)
 	}
 	l := &Loaded{Name: app.Name, Layers: layers}
-	for _, layer := range layers {
+	for i := range layers {
+		layer := &layers[i]
 		if !layer.Exists {
 			continue
 		}
@@ -197,27 +206,65 @@ func Load(app App, o Options) (*Loaded, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := decodeInto(data, &l.Raw); err != nil {
+		decoded, err := decodeInto(data, &l.Raw)
+		if err != nil {
 			return nil, fmt.Errorf("%s: %w", layer.Path, err)
+		}
+		if len(decoded.CommandDirs) > 0 && layer.Kind == "built-in" {
+			return nil, fmt.Errorf("%s: commandDirs is for user and project configs", layer.Path)
+		}
+		for _, d := range decoded.CommandDirs {
+			if strings.TrimSpace(d) == "" {
+				return nil, fmt.Errorf("%s: commandDirs: empty entry", layer.Path)
+			}
+			layer.ExtraCommandDirs = append(layer.ExtraCommandDirs, ResolveDir(d, filepath.Dir(layer.Path)))
 		}
 	}
 	l.Profile = expand(l.Raw)
 	if err := validate(l.Profile); err != nil {
 		return nil, fmt.Errorf("%s config: %w", app.Name, err)
 	}
-	// Command folders: built-in, user, project. Missing folders are skipped at scan time.
+	// Command folders, later ones winning: built-in, user commands/ then the user's
+	// commandDirs, project commands/ then the project's commandDirs. Missing default
+	// folders are skipped at scan time; missing commandDirs are reported.
 	if app.FS != nil {
 		if sub, err := fs.Sub(app.FS, "commands"); err == nil {
 			l.CommandDirs = append(l.CommandDirs, scripts.Dir{Label: "built-in " + app.Name + " commands", FS: sub})
 		}
 	}
-	user, project := layers[1].CommandsDir, layers[2].CommandsDir
-	l.CommandDirs = append(l.CommandDirs, scripts.Dir{Label: user, FS: os.DirFS(user)})
-	// Run from the home folder, the project folder is the user folder: list it once.
-	if !sameDir(user, project) {
-		l.CommandDirs = append(l.CommandDirs, scripts.Dir{Label: project, FS: os.DirFS(project)})
+	var seen []string
+	add := func(dir string, required bool) {
+		// Run from the home folder, the project folder is the user folder: list it once.
+		for _, s := range seen {
+			if sameDir(s, dir) {
+				return
+			}
+		}
+		seen = append(seen, dir)
+		l.CommandDirs = append(l.CommandDirs, scripts.Dir{Label: dir, FS: os.DirFS(dir), Required: required})
+	}
+	for _, layer := range layers[1:] {
+		add(layer.CommandsDir, false)
+		for _, d := range layer.ExtraCommandDirs {
+			add(d, true)
+		}
 	}
 	return l, nil
+}
+
+// ResolveDir expands ${VAR} and a leading ~/ in a commandDirs entry, and makes a
+// relative path relative to base (the folder of the config file naming it).
+func ResolveDir(dir, base string) string {
+	dir = ExpandVars(dir)
+	if dir == "~" || strings.HasPrefix(dir, "~/") || strings.HasPrefix(dir, `~\`) {
+		if home, err := os.UserHomeDir(); err == nil {
+			dir = filepath.Join(home, dir[1:])
+		}
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(base, dir)
+	}
+	return filepath.Clean(dir)
 }
 
 func sameDir(a, b string) bool {
@@ -226,17 +273,18 @@ func sameDir(a, b string) bool {
 	return errA == nil && errB == nil && a == b
 }
 
-// decodeInto merges one layer into p. Unknown keys are errors, to catch typos.
-func decodeInto(data []byte, p *Profile) error {
+// decodeInto merges one layer into p and returns the layer. Unknown keys are errors,
+// to catch typos.
+func decodeInto(data []byte, p *Profile) (*Profile, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	dec.UseNumber()
 	var layer Profile
 	if err := dec.Decode(&layer); err != nil {
-		return err
+		return nil, err
 	}
 	merge(p, &layer)
-	return nil
+	return &layer, nil
 }
 
 func merge(base, layer *Profile) {
@@ -250,6 +298,7 @@ func merge(base, layer *Profile) {
 	str(&base.Instructions, layer.Instructions)
 	str(&base.Setup, layer.Setup)
 	str(&base.Root, layer.Root)
+	base.CommandDirs = append(base.CommandDirs, layer.CommandDirs...)
 	if layer.Timeout != 0 {
 		base.Timeout = layer.Timeout
 	}

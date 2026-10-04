@@ -39,6 +39,11 @@ var ErrFileAccessDisabled = errors.New("file access is disabled in this shell")
 // `help`, so agents get our command list instead of bash's builtin help.
 const helpAlias = "\x00help"
 
+// pwdAlias is what the bash `pwd` builtin is renamed to. The builtin prints $PWD, which on
+// Windows holds the interpreter's backslash form ("\sub"), and `pwd -P` would resolve
+// symlinks on the real filesystem. The replacement prints the virtual directory.
+const pwdAlias = "\x00pwd"
+
 type Options struct {
 	// Root is a host directory exposed to scripts as "/". Empty disables file access.
 	Root string
@@ -136,8 +141,11 @@ func (e *Engine) Run(ctx context.Context, script string, cmds engine.Registry, s
 func callHandler(cmds engine.Registry) interp.CallHandlerFunc {
 	_, hasHelp := cmds.Lookup("help")
 	return func(ctx context.Context, args []string) ([]string, error) {
-		if hasHelp && args[0] == "help" {
+		switch {
+		case hasHelp && args[0] == "help":
 			args[0] = helpAlias
+		case args[0] == "pwd":
+			args[0] = pwdAlias
 		}
 		return args, nil
 	}
@@ -149,6 +157,9 @@ func execMiddleware(cmds engine.Registry, sb *sandbox) func(interp.ExecHandlerFu
 		return func(ctx context.Context, args []string) error {
 			hc := interp.HandlerCtx(ctx)
 			name := args[0]
+			if name == pwdAlias {
+				return pwd(hc, args[1:])
+			}
 			if name == helpAlias {
 				name = "help"
 			}
@@ -183,6 +194,19 @@ func execMiddleware(cmds engine.Registry, sb *sandbox) func(interp.ExecHandlerFu
 			return interp.ExitStatus(uint8(code))
 		}
 	}
+}
+
+// pwd prints the virtual working directory. -L and -P are accepted; with no real
+// filesystem behind "/" there are no symlinks to resolve.
+func pwd(hc interp.HandlerContext, args []string) error {
+	for _, a := range args {
+		if a != "-L" && a != "-P" {
+			fmt.Fprintf(hc.Stderr, "pwd: invalid option: %q\n", a)
+			return interp.ExitStatus(2)
+		}
+	}
+	fmt.Fprintln(hc.Stdout, toVirtual(hc.Dir))
+	return nil
 }
 
 // toVirtual normalises an interpreter directory to slash form ("/a/b").

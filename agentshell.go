@@ -45,6 +45,16 @@ type Builtin = engine.Command
 // Invocation is one call of a Builtin.
 type Invocation = engine.Invocation
 
+// Subcommand is an app-specific CLI verb, such as godot-shell's `addon`. Core verbs win
+// over a Subcommand of the same name.
+type Subcommand struct {
+	Name    string // first argument that selects it, e.g. "addon"
+	Usage   string // help usage after the binary name, e.g. "addon install|status|remove [DIR]"
+	Summary string // help description
+	// Run gets the arguments after Name and returns the exit code.
+	Run func(args []string, stdout, stderr io.Writer) int
+}
+
 type Config struct {
 	Name    string // binary and MCP server name, e.g. "blender-shell"
 	App     string // config folder name, e.g. "blender" for ~/.agent-shell/blender/ (default: Name)
@@ -56,6 +66,8 @@ type Config struct {
 	FS fs.FS
 	// Builtins are extra Go-side commands; they win over every other command source.
 	Builtins []Builtin
+	// Subcommands are extra CLI verbs, listed in --help after the core ones.
+	Subcommands []Subcommand
 	// Options overrides where config files are looked up (tests).
 	Options profile.Options
 	// Claude is the client CLI used by `setup` (default "claude"; tests use a fake).
@@ -113,11 +125,16 @@ func run(cfg Config, args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	case "run":
 		return c.withApp(func(l *profile.Loaded) int { return c.runScript(l, rest) })
 	case "commands":
-		return c.withApp(c.commands)
+		return c.withApp(func(l *profile.Loaded) int { return c.commands(l, rest) })
 	case "mcp":
 		return c.withApp(func(l *profile.Loaded) int { return c.mcp(l, rest) })
 	case "config":
 		return c.withApp(func(l *profile.Loaded) int { return c.config(l, rest) })
+	}
+	for _, s := range cfg.Subcommands {
+		if s.Name == sub && sub != "" {
+			return s.Run(rest, stdout, stderr)
+		}
 	}
 	c.eprintf("unknown command %q\nRun %s --help for usage.\n", sub, cfg.Name)
 	return 2
@@ -130,8 +147,12 @@ func (c *cli) helpText() string {
 		{"setup [--scope user|project|local] [--name NAME] [--print]", "Create the user config and register with Claude Code"},
 		{"run SCRIPT", `Run a script once ("-" reads it from stdin)`},
 		{"commands", "List the commands and their sources"},
+		{"commands add|remove DIR [--project]", "Add or remove a folder of your own script commands"},
 		{"mcp list|add|remove|import ...", "Manage the upstream MCP servers"},
 		{"config path|show", "Show config files, or the merged config"},
+	}
+	for _, s := range c.cfg.Subcommands {
+		usage = append(usage, [2]string{s.Usage, s.Summary})
 	}
 	if c.cfg.UpdateRepo != "" {
 		usage = append(usage, [2]string{"update [--check]", "Install an update, or only check for one"})
@@ -144,7 +165,7 @@ your script commands.
 Usage:
 `, n)
 	// Descriptions line up after the longest short form; longer forms wrap.
-	width := len(n) + len(" mcp list|add|remove|import ...")
+	width := len(n) + len(" commands add|remove DIR [--project]")
 	for _, u := range usage {
 		cmd := strings.TrimSpace(n + " " + u[0])
 		if len(cmd) > width {
@@ -304,7 +325,10 @@ func (c *cli) runScript(l *profile.Loaded, args []string) int {
 	return res.ExitCode
 }
 
-func (c *cli) commands(l *profile.Loaded) int {
+func (c *cli) commands(l *profile.Loaded, args []string) int {
+	if len(args) > 0 {
+		return c.commandDirs(l, args)
+	}
 	sh, err := c.newShell(l)
 	if err != nil {
 		c.eprintf("%v\n", err)
@@ -319,6 +343,61 @@ func (c *cli) commands(l *profile.Loaded) int {
 		return 1
 	}
 	c.printf("\n%s", builtins.FormatList(reg))
+	return 0
+}
+
+// commandDirs edits the commandDirs list of the user config (or the project config with
+// --project): `commands add DIR` and `commands remove DIR`.
+func (c *cli) commandDirs(l *profile.Loaded, args []string) int {
+	usage := func() int {
+		c.eprintf("usage: %s commands add|remove DIR [--project]\n", c.cfg.Name)
+		return 2
+	}
+	sub, args := args[0], args[1:]
+	target := profile.UserConfigPath(l.Name, c.cfg.Options)
+	var dir string
+	for _, a := range args {
+		switch {
+		case a == "--project":
+			target = profile.ProjectConfigPath(l.Name, c.cfg.Options)
+		case strings.HasPrefix(a, "-") || dir != "":
+			c.eprintf("unexpected argument %q\n", a)
+			return usage()
+		default:
+			dir = a
+		}
+	}
+	if dir == "" || (sub != "add" && sub != "remove") {
+		return usage()
+	}
+	// A path typed relative to the working directory is stored absolute, since the
+	// config resolves relative entries against its own folder. ~ and ${VAR} are kept.
+	entry := dir
+	if !strings.HasPrefix(dir, "~") && !strings.Contains(dir, "${") && !filepath.IsAbs(dir) {
+		if abs, err := filepath.Abs(dir); err == nil {
+			entry = abs
+		}
+	}
+	if sub == "remove" {
+		err := profile.RemoveCommandDir(target, dir)
+		if err != nil && entry != dir {
+			err = profile.RemoveCommandDir(target, entry)
+		}
+		if err != nil {
+			c.eprintf("%v\n", err)
+			return 1
+		}
+		c.printf("Removed %s from commandDirs in %s\n", dir, target)
+		return 0
+	}
+	if err := profile.AddCommandDir(target, entry); err != nil {
+		c.eprintf("%v\n", err)
+		return 1
+	}
+	c.printf("Added %s to commandDirs in %s\n", entry, target)
+	if info, err := os.Stat(profile.ResolveDir(entry, filepath.Dir(target))); err != nil || !info.IsDir() {
+		c.eprintf("warning: %s is not a folder yet\n", entry)
+	}
 	return 0
 }
 
@@ -579,6 +658,13 @@ func (c *cli) config(l *profile.Loaded, args []string) int {
 			}
 			c.printf("%-9s %-7s %s\n", layer.Kind, mark, layer.Path)
 			c.printf("%-9s %-7s %s\n", "", "", layer.CommandsDir)
+			for _, d := range layer.ExtraCommandDirs {
+				mark := "missing"
+				if info, err := os.Stat(d); err == nil && info.IsDir() {
+					mark = "found"
+				}
+				c.printf("%-9s %-7s %s\n", "", mark, d)
+			}
 		}
 		return 0
 	case "show":

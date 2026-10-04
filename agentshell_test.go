@@ -227,6 +227,7 @@ func TestMCPManagement(t *testing.T) {
 	e.builtin(blenderLike)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers": {"poly": {"type": "stdio", "command": "npx", "args": ["-y", "poly-mcp"]}}}`), 0o644)
 
 	if _, errOut, code := e.run("", "mcp", "add", "assets", "--env", "K=V", "--", "uvx", "asset-mcp"); code != 0 {
@@ -330,6 +331,29 @@ func TestCLIErrors(t *testing.T) {
 	}
 }
 
+func TestSubcommands(t *testing.T) {
+	e := newEnv(t)
+	var got []string
+	e.cfg.Subcommands = []Subcommand{{
+		Name: "addon", Usage: "addon install [DIR]", Summary: "Install the editor addon",
+		Run: func(args []string, stdout, _ io.Writer) int {
+			got = args
+			fmt.Fprint(stdout, "installed")
+			return 3
+		},
+	}, {Name: "run", Usage: "run X", Summary: "shadowed", Run: func([]string, io.Writer, io.Writer) int { return 9 }}}
+	out, _, code := e.run("", "addon", "install", "x")
+	if code != 3 || out != "installed" || strings.Join(got, " ") != "install x" {
+		t.Fatalf("dispatch: %q %d %q", out, code, got)
+	}
+	if _, _, code := e.run("", "run", "true"); code == 9 {
+		t.Fatal("subcommand shadowed a core verb")
+	}
+	if out, _, _ := e.run("", "--help"); !strings.Contains(out, "test-shell addon install [DIR]") || !strings.Contains(out, "Install the editor addon") {
+		t.Fatalf("help: %q", out)
+	}
+}
+
 func TestTimeoutEnv(t *testing.T) {
 	e := newEnv(t)
 	addr := startHost(t)
@@ -338,5 +362,54 @@ func TestTimeoutEnv(t *testing.T) {
 	_, errOut, code := e.run("", "run", "while true; do :; done")
 	if code != 124 || !strings.Contains(errOut, "timed out after 1s") {
 		t.Fatalf("got %q %d", errOut, code)
+	}
+}
+
+func TestCommandDirsCLI(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("re-executes the test binary")
+	}
+	e := newEnv(t)
+	e.builtin(blenderLike, "commands/objects.py", "# summary: list scene objects\nprint(ARGS)\n")
+	e.writeUserConfig(`{"mcpServers": {"blender-mcp": ` + fakeMCPEntry(t, "") + `}}`)
+	tools := t.TempDir()
+	os.WriteFile(filepath.Join(tools, "mine.py"), []byte("# summary: from my repo\nprint(1)\n"), 0o644)
+	os.WriteFile(filepath.Join(tools, "objects.py"), []byte("# summary: my objects\nprint(2)\n"), 0o644)
+
+	out, errOut, code := e.run("", "commands", "add", tools)
+	if code != 0 || !strings.Contains(out, "Added "+tools+" to commandDirs in "+profile.UserConfigPath("test", e.opts)) || errOut != "" {
+		t.Fatalf("add: %q %q %d", out, errOut, code)
+	}
+	if _, errOut, code := e.run("", "commands", "add", tools); code != 1 || !strings.Contains(errOut, "already") {
+		t.Fatalf("add twice: %q", errOut)
+	}
+	out, _, _ = e.run("", "commands")
+	for _, s := range []string{"script commands (4 folders): 2 commands", "  mine     from my repo", "  objects  my objects (overrides the one in built-in test commands)"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("commands: missing %q in\n%s", s, out)
+		}
+	}
+	out, _, _ = e.run("", "config", "path")
+	if !strings.Contains(out, "found   "+tools) {
+		t.Errorf("config path: %q", out)
+	}
+
+	// A folder that does not exist yet is added with a warning, and listed as missing.
+	gone := filepath.Join(t.TempDir(), "later")
+	if _, errOut, code := e.run("", "commands", "add", gone, "--project"); code != 0 || !strings.Contains(errOut, "not a folder yet") {
+		t.Fatalf("add missing: %q %d", errOut, code)
+	}
+	if out, _, _ := e.run("", "commands"); !strings.Contains(out, "missing: "+gone) {
+		t.Errorf("missing folder not reported:\n%s", out)
+	}
+
+	if _, errOut, code := e.run("", "commands", "remove", tools); code != 0 {
+		t.Fatalf("remove: %q", errOut)
+	}
+	if _, errOut, code := e.run("", "commands", "remove", tools); code != 1 || !strings.Contains(errOut, "no commandDirs") {
+		t.Fatalf("remove twice: %q", errOut)
+	}
+	if _, errOut, code := e.run("", "commands", "frob", tools); code != 2 || !strings.Contains(errOut, "usage") {
+		t.Fatalf("bad subcommand: %q", errOut)
 	}
 }
