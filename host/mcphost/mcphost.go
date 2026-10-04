@@ -53,6 +53,10 @@ type Config struct {
 	// them (blender-mcp returns "Error ..." as normal text): they go to stderr, exit 1.
 	ErrorPattern *regexp.Regexp
 
+	// ImageDir is where images in tool results are saved; the output shows each saved
+	// image's path. Empty keeps a short placeholder instead.
+	ImageDir string
+
 	// ConnectTimeout bounds starting and initializing the server (default 60s).
 	ConnectTimeout time.Duration
 	// Version is reported to the upstream server as the client version.
@@ -369,11 +373,7 @@ func ParseDynamicDefault(v any) (d *DynamicDefault, ok bool, err error) {
 			d.Args = args
 		case "$jq":
 			src, _ := val.(string)
-			q, err := gojq.Parse(src)
-			if err != nil {
-				return nil, true, fmt.Errorf(`"$jq": %w`, err)
-			}
-			if d.JQ, err = gojq.Compile(q, gojq.WithEnvironLoader(func() []string { return nil })); err != nil {
+			if d.JQ, err = CompileJQ(src); err != nil {
 				return nil, true, fmt.Errorf(`"$jq": %w`, err)
 			}
 		default:
@@ -381,6 +381,59 @@ func ParseDynamicDefault(v any) (d *DynamicDefault, ok bool, err error) {
 		}
 	}
 	return d, true, nil
+}
+
+// CompileJQ compiles a jq filter from config. The filter cannot read the environment.
+func CompileJQ(src string) (*gojq.Code, error) {
+	q, err := gojq.Parse(src)
+	if err != nil {
+		return nil, err
+	}
+	return gojq.Compile(q, gojq.WithEnvironLoader(func() []string { return nil }))
+}
+
+// ErrNotJSON is returned by RunJQ when its input is not JSON.
+var ErrNotJSON = errors.New("not JSON")
+
+// RunJQ runs a compiled filter over text holding one JSON value, as `jq -r` would print
+// it: string results raw, others as compact JSON, one per line.
+func RunJQ(ctx context.Context, code *gojq.Code, text string) (string, error) {
+	input, err := decodeJSON(text)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrNotJSON, err)
+	}
+	var lines []string
+	iter := code.RunWithContext(ctx, input)
+	for {
+		v, ok := iter.Next()
+		if !ok {
+			break
+		}
+		switch v := v.(type) {
+		case error:
+			return "", jqError(v)
+		case string:
+			lines = append(lines, v)
+		default:
+			b, err := gojq.Marshal(v)
+			if err != nil {
+				return "", err
+			}
+			lines = append(lines, string(b))
+		}
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+// jqError shows error("message") from a filter verbatim, without gojq's prefix.
+func jqError(err error) error {
+	var ve gojq.ValueError
+	if errors.As(err, &ve) {
+		if msg, ok := ve.Value().(string); ok {
+			return errors.New(msg)
+		}
+	}
+	return err
 }
 
 func (s *Server) defaultValue(ctx context.Context, key string, v any, depth int) (any, error) {
@@ -419,14 +472,7 @@ func (s *Server) defaultValue(ctx context.Context, key string, v any, depth int)
 			return nil, fmt.Errorf("%s: no value found", d.Tool)
 		}
 		if err, isErr := out.(error); isErr {
-			// Show error("message") from the filter verbatim, without gojq's prefix.
-			var ve gojq.ValueError
-			if errors.As(err, &ve) {
-				if msg, ok := ve.Value().(string); ok {
-					return nil, errors.New(msg)
-				}
-			}
-			return nil, err
+			return nil, jqError(err)
 		}
 		value = out
 	}

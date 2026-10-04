@@ -64,6 +64,15 @@ type Host struct {
 	Token    string `json:"token,omitempty"`
 	Hint     string `json:"hint,omitempty"` // shown when the host is unreachable
 	Disabled bool   `json:"disabled,omitempty"`
+	// Exec runs script commands through a host command that executes code from its
+	// stdin, like gimp-shell's bridge `python`.
+	Exec *HostExec `json:"exec,omitempty"`
+}
+
+// HostExec binds script commands of one language to a host command.
+type HostExec struct {
+	Command string `json:"command"` // "python"
+	Lang    string `json:"lang"`    // "python" or "luau"
 }
 
 // Server is an upstream MCP server: an `.mcp.json` entry plus agent-shell options.
@@ -85,12 +94,17 @@ type Server struct {
 
 // Exec binds script commands of one language to a server's code-execution tool.
 type Exec struct {
-	Tool         string `json:"tool"`  // "execute_blender_code"
-	Param        string `json:"param"` // "code"
-	Lang         string `json:"lang"`  // "python" or "luau"
-	OutputPrefix string `json:"outputPrefix,omitempty"`
-	ErrorPrefix  string `json:"errorPrefix,omitempty"`
-	ErrorTrim    string `json:"errorTrim,omitempty"` // regexp removed from error text
+	Tool  string `json:"tool"`            // "execute_blender_code"
+	Param string `json:"param,omitempty"` // "code"
+	// Args is the tool's whole input, for code nested in other arguments; the string
+	// "$code" marks where the script goes. Use either Param or Args.
+	Args         map[string]any `json:"args,omitempty"`
+	Lang         string         `json:"lang"` // "python" or "luau"
+	OutputPrefix string         `json:"outputPrefix,omitempty"`
+	ErrorPrefix  string         `json:"errorPrefix,omitempty"`
+	ErrorTrim    string         `json:"errorTrim,omitempty"` // regexp removed from error text
+	OutputJq     string         `json:"outputJq,omitempty"`  // jq filter for JSON output
+	ErrorJq      string         `json:"errorJq,omitempty"`   // jq filter for JSON error text
 }
 
 // Layer is one config file that may contribute to a profile.
@@ -113,6 +127,8 @@ type Loaded struct {
 	Profile     Profile
 	Layers      []Layer
 	CommandDirs []scripts.Dir
+	// ImageDir is where images from upstream tools are saved: <user config>/<app>/images.
+	ImageDir string
 }
 
 type Options struct {
@@ -190,7 +206,7 @@ func Load(app App, o Options) (*Loaded, error) {
 	if !layers[0].Exists && !layers[1].Exists && !layers[2].Exists {
 		return nil, fmt.Errorf("no config for %s: expected %s", app.Name, layers[1].Path)
 	}
-	l := &Loaded{Name: app.Name, Layers: layers}
+	l := &Loaded{Name: app.Name, Layers: layers, ImageDir: filepath.Join(o.configDir(), app.Name, "images")}
 	for i := range layers {
 		layer := &layers[i]
 		if !layer.Exists {
@@ -320,6 +336,9 @@ func merge(base, layer *Profile) {
 		str(&base.Host.Token, h.Token)
 		str(&base.Host.Hint, h.Hint)
 		base.Host.Disabled = base.Host.Disabled || h.Disabled
+		if h.Exec != nil {
+			base.Host.Exec = h.Exec
+		}
 	}
 	for name, s := range layer.MCPServers {
 		if s == nil {
@@ -356,6 +375,14 @@ func merge(base, layer *Profile) {
 }
 
 func validate(p Profile) error {
+	if h := p.Host; h != nil && h.Exec != nil {
+		if h.Exec.Command == "" {
+			return errors.New("host.exec: needs command")
+		}
+		if _, ok := scripts.Langs[h.Exec.Lang]; !ok {
+			return fmt.Errorf("host.exec: unknown lang %q (want python or luau)", h.Exec.Lang)
+		}
+	}
 	for name, s := range p.MCPServers {
 		if s == nil || s.Disabled {
 			continue
@@ -389,11 +416,22 @@ func validate(p Profile) error {
 			if _, ok := scripts.Langs[e.Lang]; !ok {
 				return fmt.Errorf("mcpServers.%s.exec: unknown lang %q (want python or luau)", name, e.Lang)
 			}
-			if e.Tool == "" || e.Param == "" {
-				return fmt.Errorf("mcpServers.%s.exec: needs tool and param", name)
+			if e.Tool == "" || (e.Param == "") == (e.Args == nil) {
+				return fmt.Errorf("mcpServers.%s.exec: needs tool, and either param or args", name)
+			}
+			if e.Args != nil && !scripts.HasCodeMarker(e.Args) {
+				return fmt.Errorf("mcpServers.%s.exec.args: no %q to put the code in", name, scripts.CodeMarker)
 			}
 			if _, err := regexp.Compile(e.ErrorTrim); err != nil {
 				return fmt.Errorf("mcpServers.%s.exec.errorTrim: %w", name, err)
+			}
+			for key, src := range map[string]string{"outputJq": e.OutputJq, "errorJq": e.ErrorJq} {
+				if src == "" {
+					continue
+				}
+				if _, err := mcphost.CompileJQ(src); err != nil {
+					return fmt.Errorf("mcpServers.%s.exec.%s: %w", name, key, err)
+				}
 			}
 		}
 	}

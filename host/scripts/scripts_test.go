@@ -10,11 +10,13 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/itchyny/gojq"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/brohd11/agent-shell/engine/shengine"
 	"github.com/brohd11/agent-shell/host"
 	"github.com/brohd11/agent-shell/host/scripts"
+	"github.com/brohd11/agent-shell/hosttest"
 	"github.com/brohd11/agent-shell/shell"
 )
 
@@ -227,4 +229,133 @@ func (e *errExec) CallTool(ctx context.Context, tool string, args map[string]any
 	e.codes = append(e.codes, args["code"].(string))
 	text := "sabuiltin_Assistant.rbxm.Tools.ExecuteLuauTool:66: sabuiltin_Assistant.rbxm.Util.CommandExecution:54: AssistantCommand:2: boom"
 	return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil
+}
+
+// callAPIExec mimics gimp-mcp's call_api: the code is nested in args, output is a JSON
+// list of printed text, and errors are "Error: " plus a JSON-quoted message (or plain
+// text when GIMP is unreachable).
+type callAPIExec struct {
+	inputs []map[string]any
+}
+
+func (c *callAPIExec) Name() string { return "gimp" }
+
+func (c *callAPIExec) CallTool(ctx context.Context, tool string, args map[string]any) (*mcp.CallToolResult, error) {
+	c.inputs = append(c.inputs, args)
+	code := args["args"].([]any)[1].([]any)[0].(string)
+	text := `["hello\n", "world"]`
+	switch {
+	case strings.Contains(code, "raise"):
+		text = `Error: "name 'x' is not defined"`
+	case strings.Contains(code, "offline"):
+		text = "Error: Could not connect to GIMP at localhost:9877."
+	case strings.Contains(code, "plain"):
+		text = "not json"
+	case strings.Contains(code, "scalar"):
+		text = `"not a list"`
+	}
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil
+}
+
+func TestArgsTemplateAndJQ(t *testing.T) {
+	exec := &callAPIExec{}
+	jq := func(src string) *gojq.Code {
+		q, err := gojq.Parse(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		code, err := gojq.Compile(q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return code
+	}
+	template := map[string]any{"api_path": "exec", "args": []any{"pyGObject-console", []any{scripts.CodeMarker}}}
+	src := &scripts.Source{
+		Dirs: []scripts.Dir{{Label: "d", FS: fstest.MapFS{
+			"ok.py":      {Data: []byte("print('hello')\n")},
+			"bad.py":     {Data: []byte("raise x\n")},
+			"offline.py": {Data: []byte("# offline\n")},
+			"plain.py":   {Data: []byte("# plain\n")},
+			"scalar.py":  {Data: []byte("# scalar\n")},
+		}}},
+		Bindings: []scripts.Binding{{
+			Server: exec, Tool: "call_api", Args: template, Lang: "python",
+			ErrorPrefix: "Error: ", OutputJQ: jq(`join("")`), ErrorJQ: jq(`.`),
+		}},
+	}
+	sh := newShell(t, src)
+
+	res := sh.Run(context.Background(), `ok`, 0)
+	if res.Stdout != "hello\nworld\n" || res.ExitCode != 0 {
+		t.Fatalf("ok: %+v", res)
+	}
+	in := exec.inputs[0]
+	nested := in["args"].([]any)
+	if in["api_path"] != "exec" || nested[0] != "pyGObject-console" || !strings.HasSuffix(nested[1].([]any)[0].(string), "print('hello')\n") {
+		t.Fatalf("input: %#v", in)
+	}
+	if template["args"].([]any)[1].([]any)[0] != scripts.CodeMarker {
+		t.Fatalf("template was modified: %#v", template)
+	}
+
+	cases := []struct{ script, stdout, stderr string }{
+		{`bad`, "", "name 'x' is not defined\n"},
+		{`offline`, "", "Could not connect to GIMP at localhost:9877.\n"},
+		{`plain`, "not json\n", ""},
+		{`scalar || echo "status=$?"`, "status=1\n", "scalar: output filter: join(\"\") cannot be applied to: string (\"not a list\")\n"},
+	}
+	for _, c := range cases {
+		res := sh.Run(context.Background(), c.script, 0)
+		if res.Stdout != c.stdout || res.Stderr != c.stderr {
+			t.Errorf("%s: got stdout %q stderr %q, want %q %q", c.script, res.Stdout, res.Stderr, c.stdout, c.stderr)
+		}
+	}
+}
+
+func TestHostBinding(t *testing.T) {
+	fake := &hosttest.Host{
+		Name:     "gimp",
+		Commands: []host.CommandInfo{{Name: "python", Summary: "run Python from stdin"}},
+		Handlers: map[string]hosttest.Handler{
+			"python": func(req host.Request) host.InvokeResult {
+				if strings.Contains(req.Stdin, "raise") {
+					return host.InvokeResult{Stdout: "printed first", Stderr: "RuntimeError: boom", ExitCode: 1}
+				}
+				// Echo the prelude, so the test sees what was injected.
+				return host.InvokeResult{Stdout: strings.SplitN(req.Stdin, "\n", 2)[0]}
+			},
+		},
+	}
+	addr, err := fake.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fake.Close()
+	client := &host.Client{Addr: addr}
+	src := &scripts.Source{
+		Dirs: []scripts.Dir{{Label: "d", FS: fstest.MapFS{
+			"show.py": {Data: []byte("# summary: show\nprint(ARGS)\n")},
+			"bad.py":  {Data: []byte("# server: host\nprint('printed first')\nraise RuntimeError('boom')\n")},
+		}}},
+		Bindings: []scripts.Binding{{Host: client, Tool: "python", Lang: "python"}},
+	}
+	sh := &shell.Shell{Sources: []host.Source{client, src}, Engine: shengine.New(shengine.Options{})}
+
+	res := sh.Run(context.Background(), `show 'a b' c`, 0)
+	if res.Stdout != `ARGS = ["a b","c"]; STDIN = ""; CWD = "/"`+"\n" || res.ExitCode != 0 {
+		t.Fatalf("show: %+v", res)
+	}
+	// Output printed before an error is kept, and the host's exit code passes through.
+	res = sh.Run(context.Background(), `bad; echo "status=$?"`, 0)
+	if res.Stdout != "printed first\nstatus=1\n" || res.Stderr != "RuntimeError: boom\n" {
+		t.Fatalf("bad: %+v", res)
+	}
+	res = sh.Run(context.Background(), `help bad | tail -1; help | grep -c '^  python'`, 0)
+	if !strings.Contains(res.Stdout, "runs via host python") || !strings.HasSuffix(res.Stdout, "1\n") {
+		t.Fatalf("help: %q", res.Stdout)
+	}
+	if inv := fake.Invokes(); inv[0].Cmd != "python" || len(inv[0].Args) != 0 {
+		t.Fatalf("invoke: %+v", inv[0])
+	}
 }

@@ -2,11 +2,13 @@ package mcphost
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -92,31 +94,64 @@ func (n *namespace) run(ctx context.Context, inv *engine.Invocation) int {
 		host.WriteLine(inv.Stderr, ResultText(res))
 		return 1
 	}
-	return WriteResult(inv, res)
+	text, err := n.server.renderResult(tool.Name, res)
+	if err != nil {
+		fmt.Fprintf(inv.Stderr, "%s %s: %v\n", name, tool.Name, err)
+		return 1
+	}
+	return writeText(inv, text, res.IsError)
 }
 
 // ResultText renders a tool result's content: text as-is, other content as short
 // placeholders, and structured content as JSON when there is no text.
 func ResultText(res *mcp.CallToolResult) string {
+	text, _ := resultText(res, nil)
+	return text
+}
+
+// resultText is ResultText with images handed to saveImage, whose return value
+// replaces the placeholder. A nil saveImage keeps the placeholder.
+func resultText(res *mcp.CallToolResult, saveImage func(mimeType string, data []byte) (string, error)) (string, error) {
 	var parts []string
 	hasText := false
+	image := func(mimeType string, data []byte, placeholder string) error {
+		if saveImage == nil {
+			parts = append(parts, placeholder)
+			return nil
+		}
+		path, err := saveImage(mimeType, data)
+		if err != nil {
+			return err
+		}
+		parts = append(parts, path)
+		return nil
+	}
 	for _, c := range res.Content {
 		switch c := c.(type) {
 		case *mcp.TextContent:
 			parts = append(parts, c.Text)
 			hasText = true
 		case *mcp.ImageContent:
-			parts = append(parts, fmt.Sprintf("[image %s, %d bytes]", c.MIMEType, len(c.Data)))
+			if err := image(c.MIMEType, c.Data, fmt.Sprintf("[image %s, %d bytes]", c.MIMEType, len(c.Data))); err != nil {
+				return "", err
+			}
 		case *mcp.AudioContent:
 			parts = append(parts, fmt.Sprintf("[audio %s, %d bytes]", c.MIMEType, len(c.Data)))
 		case *mcp.ResourceLink:
 			parts = append(parts, fmt.Sprintf("[resource %s]", c.URI))
 		case *mcp.EmbeddedResource:
-			if c.Resource != nil && c.Resource.Text != "" {
-				parts = append(parts, c.Resource.Text)
+			switch r := c.Resource; {
+			case r == nil:
+			case r.Text != "":
+				parts = append(parts, r.Text)
 				hasText = true
-			} else if c.Resource != nil {
-				parts = append(parts, fmt.Sprintf("[resource %s, %d bytes]", c.Resource.URI, base64.StdEncoding.DecodedLen(len(c.Resource.Blob))))
+			default:
+				placeholder := fmt.Sprintf("[resource %s, %d bytes]", r.URI, len(r.Blob))
+				if !strings.HasPrefix(r.MIMEType, "image/") {
+					parts = append(parts, placeholder)
+				} else if err := image(r.MIMEType, r.Blob, placeholder); err != nil {
+					return "", err
+				}
 			}
 		default:
 			b, _ := json.Marshal(c)
@@ -128,14 +163,97 @@ func ResultText(res *mcp.CallToolResult) string {
 			parts = append(parts, string(b))
 		}
 	}
-	return strings.Join(parts, "\n")
+	return strings.Join(parts, "\n"), nil
+}
+
+// renderResult is ResultText for output the agent reads: with an ImageDir, images are
+// saved there and shown as their path on a line of its own, so the agent can open them.
+func (s *Server) renderResult(tool string, res *mcp.CallToolResult) (string, error) {
+	if s.cfg.ImageDir == "" {
+		return ResultText(res), nil
+	}
+	n := 0
+	return resultText(res, func(mimeType string, data []byte) (string, error) {
+		n++
+		return saveImage(s.cfg.ImageDir, fmt.Sprintf("%s-%s", s.cfg.Name, tool), n, mimeType, data)
+	})
+}
+
+// keepImages is how many saved images an image folder keeps; older ones are removed.
+const keepImages = 50
+
+var imageExts = map[string]string{
+	"image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/gif": ".gif",
+	"image/webp": ".webp", "image/svg+xml": ".svg", "image/bmp": ".bmp", "image/tiff": ".tiff",
+}
+
+// saveImage writes one image to dir and returns its absolute path, then prunes dir to
+// the newest keepImages files.
+func saveImage(dir, prefix string, n int, mimeType string, data []byte) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("saving image: %w", err)
+	}
+	ext, ok := imageExts[strings.ToLower(mimeType)]
+	if !ok {
+		ext = ".bin"
+	}
+	name := fmt.Sprintf("%s-%s-%d%s", prefix, time.Now().Format("20060102-150405.000"), n, ext)
+	path, err := filepath.Abs(filepath.Join(dir, name))
+	if err != nil {
+		return "", fmt.Errorf("saving image: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", fmt.Errorf("saving image: %w", err)
+	}
+	pruneImages(dir, keepImages)
+	return path, nil
+}
+
+// pruneImages removes all but the newest keep files in dir. Failures are ignored: a
+// full folder is not worth failing a tool call over.
+func pruneImages(dir string, keep int) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	type file struct {
+		path string
+		mod  time.Time
+	}
+	var files []file
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, file{filepath.Join(dir, e.Name()), info.ModTime()})
+	}
+	if len(files) <= keep {
+		return
+	}
+	// Newest first; names carry the time, so they break ties within a timestamp.
+	sort.Slice(files, func(i, j int) bool {
+		if !files[i].mod.Equal(files[j].mod) {
+			return files[i].mod.After(files[j].mod)
+		}
+		return files[i].path > files[j].path
+	})
+	for _, f := range files[keep:] {
+		os.Remove(f.path)
+	}
 }
 
 // WriteResult writes a tool result to stdout, or to stderr with exit 1 when the tool
 // reported an error.
 func WriteResult(inv *engine.Invocation, res *mcp.CallToolResult) int {
-	text := ResultText(res)
-	if res.IsError {
+	return writeText(inv, ResultText(res), res.IsError)
+}
+
+func writeText(inv *engine.Invocation, text string, isError bool) int {
+	if isError {
 		host.WriteLine(inv.Stderr, text)
 		return 1
 	}

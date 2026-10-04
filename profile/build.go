@@ -13,10 +13,14 @@ import (
 func (l *Loaded) Sources(version string) ([]host.Source, error) {
 	p := l.Profile
 	var sources []host.Source
-	if h := p.Host; h != nil && !h.Disabled && h.Address != "" {
-		sources = append(sources, &host.Client{Addr: h.Address, Token: h.Token, Hint: h.Hint})
-	}
 	var bindings []scripts.Binding
+	if h := p.Host; h != nil && !h.Disabled && h.Address != "" {
+		client := &host.Client{Addr: h.Address, Token: h.Token, Hint: h.Hint}
+		sources = append(sources, client)
+		if h.Exec != nil {
+			bindings = append(bindings, scripts.Binding{Host: client, Tool: h.Exec.Command, Lang: h.Exec.Lang})
+		}
+	}
 	for _, name := range p.ServerNames() {
 		s := p.MCPServers[name]
 		cfg := mcphost.Config{
@@ -24,7 +28,8 @@ func (l *Loaded) Sources(version string) ([]host.Source, error) {
 			Command: s.Command, Args: s.Args, Env: s.Env,
 			URL: s.URL, Headers: s.Headers,
 			HideTools: s.HideTools, Defaults: s.Defaults,
-			Version: version,
+			ImageDir: l.ImageDir,
+			Version:  version,
 		}
 		if s.ErrorPattern != "" {
 			cfg.ErrorPattern = regexp.MustCompile(s.ErrorPattern) // validated on load
@@ -33,11 +38,18 @@ func (l *Loaded) Sources(version string) ([]host.Source, error) {
 		sources = append(sources, srv)
 		if e := s.Exec; e != nil {
 			b := scripts.Binding{
-				Server: srv, Tool: e.Tool, Param: e.Param, Lang: e.Lang,
+				Server: srv, Tool: e.Tool, Param: e.Param, Args: e.Args, Lang: e.Lang,
 				OutputPrefix: e.OutputPrefix, ErrorPrefix: e.ErrorPrefix,
 			}
 			if e.ErrorTrim != "" {
 				b.ErrorTrim = regexp.MustCompile(e.ErrorTrim) // validated on load
+			}
+			// The filters were validated on load too.
+			if e.OutputJq != "" {
+				b.OutputJQ, _ = mcphost.CompileJQ(e.OutputJq)
+			}
+			if e.ErrorJq != "" {
+				b.ErrorJQ, _ = mcphost.CompileJQ(e.ErrorJq)
 			}
 			bindings = append(bindings, b)
 		}

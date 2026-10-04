@@ -12,6 +12,7 @@ config embedded:
 |---|---|---|
 | Blender | [blender-shell](https://github.com/brohd11/blender-shell) | `uvx blender-mcp` + Python script commands |
 | Roblox Studio | [roblox-shell](https://github.com/brohd11/roblox-shell) | Studio's built-in MCP server + Luau editing commands |
+| GIMP | [gimp-shell](https://github.com/brohd11/gimp-shell) | its own plug-in (native host) + Python script commands |
 | Godot | [godot-shell](https://github.com/brohd11/godot-shell) | its own editor addon (native host) |
 
 An app's **config** decides what the shell talks to:
@@ -142,6 +143,7 @@ The format is `.mcp.json`'s `mcpServers` plus agent-shell keys:
   this way, and its jq `error(...)` asks for `--studio_id` when several Studios are open.
   Tool help marks parameters the config fills in.
 - `errorPattern` turns "error as plain text" results into exit 1.
+- `exec` runs script commands through the server's code tool (see [Script commands](#script-commands)).
 - `root` exposes one directory to the shell as `/`. Empty means no file access.
 - Unknown keys are errors, which catches typos.
 
@@ -175,6 +177,10 @@ calling. Text results go to stdout; with no text, structured content is printed 
 JSON. `isError` results, and results matching `errorPattern`, go to stderr with exit 1.
 `-` and `_` are interchangeable in tool and parameter names.
 
+Images in a result (a screenshot, a render) are saved to `~/.agent-shell/<app>/images/`
+and printed as their path, one per line, so the agent can open them with its own tools
+(`blender-mcp get_viewport_screenshot | tail -1`). The folder keeps the newest 50 images.
+
 ## Script commands
 
 Drop a file into an app's `commands/` folder and it becomes a command. It runs
@@ -198,6 +204,18 @@ A file named `_lib.luau` (or `_lib.py`) in a commands folder is shared code rath
 command. Every script of that language gets it, as a `lib` table in Luau. Libraries from all
 folders are combined in order, so your folders can add helpers. `exec.errorTrim` (a
 regexp) strips noise from error text, such as Studio's internal `file:line:` prefixes.
+
+`exec.param` names the tool's code argument. For a tool that takes the code nested in
+other arguments, give its whole input as `exec.args` instead, with the string `"$code"`
+where the code goes. `exec.outputJq` and `exec.errorJq` are jq filters for tools that
+answer in JSON; text that is not JSON is kept as it is. gimp-mcp's `call_api`, for
+example, takes the code in a list and returns a JSON list of printed text:
+
+```json
+"exec": { "tool": "call_api", "lang": "python",
+          "args": { "api_path": "exec", "args": ["pyGObject-console", ["$code"]] },
+          "outputJq": "join(\"\")", "errorPrefix": "Error: ", "errorJq": "." }
+```
 
 The leading comment block is the command's help, and `summary:` is its one-line
 summary. `server: NAME` picks the server when several run the same language. Files are
@@ -250,6 +268,19 @@ one JSON line back.
 
 `hosttest/` is a complete host in about 100 lines. The Godot implementation is
 godot-shell's `addon/godot_shell/bridge.gd`.
+
+A host can also run script commands. Give it a command that executes code from its stdin,
+and point `host.exec` at it:
+
+```json
+"host": { "address": "127.0.0.1:9520", "exec": { "command": "python", "lang": "python" } }
+```
+
+Each script command is then sent to that host command, wrapped as usual (`ARGS`, `STDIN`,
+`CWD`, the `_lib`), and the host's stdout, stderr and exit code are passed through as they
+are. That keeps what a script printed before it failed, and needs none of the MCP binding's
+prefix or jq options. gimp-shell's bridge (`plugin/gimp-shell-bridge/gimp-shell-bridge.py`)
+works this way. A script's `server:` line names a host binding as `host`.
 
 ## Sandbox and trust model
 

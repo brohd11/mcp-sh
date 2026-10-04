@@ -171,9 +171,16 @@ func TestValidation(t *testing.T) {
 		`{"mcpServers": {"x": {}}}`:                         "needs a command or a url",
 		`{"mcpServers": {"x": {"type": "http"}}}`:           "type http needs a url",
 		`{"mcpServers": {"x": {"type": "ws", "url": "u"}}}`: `unknown type "ws"`,
-		`{"mcpServers": {"x": {"command": "c", "exec": {"tool": "t", "param": "p", "lang": "ruby"}}}}`: `unknown lang "ruby"`,
-		`{"mcpServers": {"bad name": {"command": "c"}}}`:                                               "invalid server name",
+		`{"mcpServers": {"x": {"command": "c", "exec": {"tool": "t", "param": "p", "lang": "ruby"}}}}`:                           `unknown lang "ruby"`,
+		`{"mcpServers": {"bad name": {"command": "c"}}}`:                                                                         "invalid server name",
+		`{"mcpServers": {"x": {"command": "c", "exec": {"tool": "t", "lang": "python"}}}}`:                                       "needs tool, and either param or args",
+		`{"mcpServers": {"x": {"command": "c", "exec": {"tool": "t", "param": "p", "args": {"a": "$code"}, "lang": "python"}}}}`: "either param or args",
+		`{"mcpServers": {"x": {"command": "c", "exec": {"tool": "t", "args": {"a": ["code"]}, "lang": "python"}}}}`:              `exec.args: no "$code"`,
+		`{"mcpServers": {"x": {"command": "c", "exec": {"tool": "t", "param": "p", "lang": "python", "outputJq": "join("}}}}`:    "exec.outputJq:",
+		`{"mcpServers": {"x": {"command": "c", "exec": {"tool": "t", "param": "p", "lang": "python", "errorJq": ".["}}}}`:        "exec.errorJq:",
 	}
+	cases[`{"host": {"address": "a:1", "exec": {"lang": "python"}}}`] = "host.exec: needs command"
+	cases[`{"host": {"address": "a:1", "exec": {"command": "python", "lang": "ruby"}}}`] = `host.exec: unknown lang "ruby"`
 	for cfg, want := range cases {
 		o := opts(t)
 		write(t, profile.UserConfigPath("custom", o), cfg)
@@ -336,5 +343,65 @@ func TestEditCommandDirs(t *testing.T) {
 	profile.RemoveCommandDir(path, "/b")
 	if b, _ := os.ReadFile(path); strings.Contains(string(b), "commandDirs") {
 		t.Fatalf("empty list kept: %s", b)
+	}
+}
+
+func TestExecTemplateAndImageDir(t *testing.T) {
+	o := opts(t)
+	write(t, profile.UserConfigPath("gimp", o), `{"mcpServers": {"gimp": {
+		"command": "uv", "args": ["run", "gimp_mcp_server.py"],
+		"exec": {"tool": "call_api", "lang": "python",
+			"args": {"api_path": "exec", "args": ["pyGObject-console", ["$code"]]},
+			"outputJq": "join(\"\")", "errorPrefix": "Error: ", "errorJq": "."}
+	}}}`)
+	l, err := profile.Load(profile.App{Name: "gimp"}, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(o.ConfigDir, "gimp", "images"); l.ImageDir != want {
+		t.Fatalf("image dir %q, want %q", l.ImageDir, want)
+	}
+	srcs, err := l.Sources("v")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, ok := srcs[len(srcs)-1].(*scripts.Source)
+	if !ok || len(src.Bindings) != 1 {
+		t.Fatalf("sources: %#v", srcs)
+	}
+	b := src.Bindings[0]
+	if b.Tool != "call_api" || b.Param != "" || b.ErrorPrefix != "Error: " || b.OutputJQ == nil || b.ErrorJQ == nil {
+		t.Fatalf("binding: %+v", b)
+	}
+	if got, _ := json.Marshal(b.Args); string(got) != `{"api_path":"exec","args":["pyGObject-console",["$code"]]}` {
+		t.Fatalf("args: %s", got)
+	}
+}
+
+func TestHostExec(t *testing.T) {
+	app := profile.App{Name: "gimp", FS: fstest.MapFS{"config.json": {Data: []byte(`{
+		"host": {"address": "127.0.0.1:${GIMP_SHELL_PORT:-9520}", "exec": {"command": "python", "lang": "python"}}
+	}`)}}}
+	o := opts(t)
+	// A user layer that only changes the address keeps the built-in exec.
+	write(t, profile.UserConfigPath("gimp", o), `{"host": {"address": "127.0.0.1:9999"}}`)
+	l, err := profile.Load(app, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcs, err := l.Sources("v")
+	if err != nil || len(srcs) != 2 {
+		t.Fatalf("sources: %v %v", srcs, err)
+	}
+	client, ok := srcs[0].(*host.Client)
+	if !ok || client.Addr != "127.0.0.1:9999" {
+		t.Fatalf("host: %#v", srcs[0])
+	}
+	src, ok := srcs[1].(*scripts.Source)
+	if !ok || len(src.Bindings) != 1 {
+		t.Fatalf("scripts: %#v", srcs[1])
+	}
+	if b := src.Bindings[0]; b.Host != client || b.Tool != "python" || b.Lang != "python" || b.Server != nil {
+		t.Fatalf("binding: %+v", b)
 	}
 }

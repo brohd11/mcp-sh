@@ -20,6 +20,7 @@ package scripts
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
@@ -27,6 +28,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/itchyny/gojq"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/brohd11/agent-shell/engine"
@@ -54,12 +56,29 @@ type Caller interface {
 	CallTool(ctx context.Context, name string, args map[string]any) (*mcp.CallToolResult, error)
 }
 
-// Binding routes scripts of one language to a server's code tool.
+// HostRunner runs code on a native host: the code is the stdin of one host command.
+// *host.Client is one.
+type HostRunner interface {
+	Invoke(ctx context.Context, cmd string, args []string, stdin, cwd string) (host.InvokeResult, error)
+}
+
+// CodeMarker is the string in a Binding's Args that the script's code replaces.
+const CodeMarker = "$code"
+
+// Binding routes scripts of one language to a server's code tool, or to a native host
+// command that runs code from its stdin.
 type Binding struct {
 	Server Caller
-	Tool   string // e.g. "execute_blender_code"
-	Param  string // the tool's code argument, e.g. "code"
-	Lang   string // key of Langs
+	// Host replaces Server for a native host; Tool is then the host command. The host's
+	// stdout, stderr and exit code pass through as they are, so the prefix and filter
+	// fields below do not apply.
+	Host  HostRunner
+	Tool  string // e.g. "execute_blender_code"
+	Param string // the tool's code argument, e.g. "code"
+	// Args is the tool's whole input, for tools that take the code nested in other
+	// arguments: every string equal to CodeMarker becomes the code. It replaces Param.
+	Args map[string]any
+	Lang string // key of Langs
 	// OutputPrefix is stripped from successful output ("Code executed successfully: ").
 	OutputPrefix string
 	// ErrorPrefix marks output that is really an error, for servers that report
@@ -68,6 +87,84 @@ type Binding struct {
 	// ErrorTrim is removed from error text (e.g. Studio's internal "file:line: "
 	// location prefixes).
 	ErrorTrim *regexp.Regexp
+	// OutputJQ and ErrorJQ filter output and error text that is JSON, after the prefixes
+	// and ErrorTrim, e.g. a list of printed lines (`join("")`) or a quoted message (`.`).
+	// Text that is not JSON is kept as it is.
+	OutputJQ, ErrorJQ *gojq.Code
+}
+
+// name is the server the binding runs through, as script headers name it.
+func (b Binding) name() string {
+	if b.Host != nil {
+		return "host"
+	}
+	return b.Server.Name()
+}
+
+// input is the tool input that runs code.
+func (b Binding) input(code string) map[string]any {
+	if b.Args == nil {
+		return map[string]any{b.Param: code}
+	}
+	return fillCode(b.Args, code).(map[string]any)
+}
+
+// fillCode copies v with every CodeMarker string replaced by code.
+func fillCode(v any, code string) any {
+	switch v := v.(type) {
+	case string:
+		if v == CodeMarker {
+			return code
+		}
+		return v
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, e := range v {
+			out[k] = fillCode(e, code)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, e := range v {
+			out[i] = fillCode(e, code)
+		}
+		return out
+	}
+	return v
+}
+
+// HasCodeMarker reports whether v holds CodeMarker somewhere.
+func HasCodeMarker(v any) bool {
+	switch v := v.(type) {
+	case string:
+		return v == CodeMarker
+	case map[string]any:
+		for _, e := range v {
+			if HasCodeMarker(e) {
+				return true
+			}
+		}
+	case []any:
+		for _, e := range v {
+			if HasCodeMarker(e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// filter applies a JQ filter to text that is JSON; other text, or a nil filter, keeps
+// the text as it is.
+func filter(ctx context.Context, code *gojq.Code, text string) (string, error) {
+	if code == nil {
+		return text, nil
+	}
+	out, err := mcphost.RunJQ(ctx, code, text)
+	if errors.Is(err, mcphost.ErrNotJSON) {
+		return text, nil
+	}
+	return out, err
 }
 
 // Dir is one folder of scripts. Later dirs override earlier ones by command name.
@@ -161,7 +258,7 @@ func (s *Source) binding(sc script) (Binding, error) {
 		if Langs[b.Lang].Ext != sc.lang.Ext {
 			continue
 		}
-		if sc.header.server != "" && b.Server.Name() != sc.header.server {
+		if sc.header.server != "" && b.name() != sc.header.server {
 			continue
 		}
 		matches = append(matches, b)
@@ -174,7 +271,7 @@ func (s *Source) binding(sc script) (Binding, error) {
 	}
 	names := make([]string, len(matches))
 	for i, m := range matches {
-		names[i] = m.Server.Name()
+		names[i] = m.name()
 	}
 	return Binding{}, fmt.Errorf("several servers run %s scripts (%s); add a '%s server: NAME' line", sc.lang.Ext, strings.Join(names, ", "), sc.lang.Comment)
 }
@@ -183,7 +280,7 @@ func (s *Source) command(sc script) engine.Command {
 	b, bindErr := s.binding(sc)
 	via := ""
 	if bindErr == nil {
-		via = fmt.Sprintf("runs via %s %s", b.Server.Name(), b.Tool)
+		via = fmt.Sprintf("runs via %s %s", b.name(), b.Tool)
 	}
 	summary := sc.header.summary
 	if summary == "" {
@@ -224,7 +321,17 @@ func (s *Source) command(sc script) engine.Command {
 				return 1
 			}
 			code := sc.lang.Wrap(inv.Args, stdin, inv.Dir, string(body), s.library(sc.lang.Ext))
-			res, err := b.Server.CallTool(ctx, b.Tool, map[string]any{b.Param: code})
+			if b.Host != nil {
+				res, err := b.Host.Invoke(ctx, b.Tool, nil, code, inv.Dir)
+				if err != nil {
+					fmt.Fprintf(inv.Stderr, "%s: %v\n", sc.name, err)
+					return 1
+				}
+				host.WriteLine(inv.Stdout, res.Stdout)
+				host.WriteLine(inv.Stderr, res.Stderr)
+				return int(res.ExitCode)
+			}
+			res, err := b.Server.CallTool(ctx, b.Tool, b.input(code))
 			if err != nil {
 				fmt.Fprintf(inv.Stderr, "%s: %v\n", sc.name, err)
 				return 1
@@ -235,10 +342,18 @@ func (s *Source) command(sc script) engine.Command {
 				if b.ErrorTrim != nil {
 					text = b.ErrorTrim.ReplaceAllString(text, "")
 				}
+				if filtered, err := filter(ctx, b.ErrorJQ, text); err == nil {
+					text = filtered
+				}
 				host.WriteLine(inv.Stderr, text)
 				return 1
 			}
-			host.WriteLine(inv.Stdout, strings.TrimPrefix(text, b.OutputPrefix))
+			text, err = filter(ctx, b.OutputJQ, strings.TrimPrefix(text, b.OutputPrefix))
+			if err != nil {
+				fmt.Fprintf(inv.Stderr, "%s: output filter: %v\n", sc.name, err)
+				return 1
+			}
+			host.WriteLine(inv.Stdout, text)
 			return 0
 		},
 	}
