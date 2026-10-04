@@ -12,8 +12,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/brohd11/agent-shell/engine"
-	"github.com/brohd11/agent-shell/host"
+	"github.com/brohd11/mcp-sh/engine"
+	"github.com/brohd11/mcp-sh/host"
 )
 
 // namespace is the command for one server, built per run from its tool list.

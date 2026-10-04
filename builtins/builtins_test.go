@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brohd11/agent-shell/builtins"
-	"github.com/brohd11/agent-shell/engine"
-	"github.com/brohd11/agent-shell/engine/shengine"
+	"github.com/brohd11/mcp-sh/builtins"
+	"github.com/brohd11/mcp-sh/engine"
+	"github.com/brohd11/mcp-sh/engine/shengine"
 )
 
 func sh(t *testing.T, root, script string) (string, string, int) {

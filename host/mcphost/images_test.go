@@ -11,7 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/brohd11/agent-shell/host/mcphost"
+	"github.com/brohd11/mcp-sh/host/mcphost"
 )
 
 var (

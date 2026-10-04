@@ -11,10 +11,10 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/brohd11/agent-shell/engine/shengine"
-	"github.com/brohd11/agent-shell/host"
-	"github.com/brohd11/agent-shell/host/mcphost"
-	"github.com/brohd11/agent-shell/shell"
+	"github.com/brohd11/mcp-sh/engine/shengine"
+	"github.com/brohd11/mcp-sh/host"
+	"github.com/brohd11/mcp-sh/host/mcphost"
+	"github.com/brohd11/mcp-sh/shell"
 )
 
 type moveIn struct {

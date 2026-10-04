@@ -13,7 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/brohd11/agent-shell/engine"
+	"github.com/brohd11/mcp-sh/engine"
 )
 
 var catCmd = command("cat", "concatenate input to stdout",

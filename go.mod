@@ -1,4 +1,4 @@
-module github.com/brohd11/agent-shell
+module github.com/brohd11/mcp-sh
 
 go 1.26.4
 

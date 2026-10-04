@@ -1,4 +1,4 @@
-// Package engine defines the seam between agent-shell and the interpreter that runs
+// Package engine defines the seam between mcp-sh and the interpreter that runs
 // scripts. Commands (host commands and in-process builtins) are plain values the engine
 // dispatches to; the engine itself decides syntax, control flow, and sandboxing.
 package engine

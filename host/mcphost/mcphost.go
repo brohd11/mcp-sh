@@ -3,7 +3,7 @@
 //
 //	blender-mcp get_object_info --object_name Cube | jq .location
 //
-// agent-shell is an MCP *client* here: it starts (stdio) or connects to (http/sse) the
+// mcp-sh is an MCP *client* here: it starts (stdio) or connects to (http/sse) the
 // upstream server itself, so it coexists with the same server registered directly in
 // the agent's client.
 package mcphost
@@ -25,12 +25,12 @@ import (
 	"github.com/itchyny/gojq"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/brohd11/agent-shell/engine"
-	"github.com/brohd11/agent-shell/host"
+	"github.com/brohd11/mcp-sh/engine"
+	"github.com/brohd11/mcp-sh/host"
 )
 
 // Config describes one upstream server. Its fields mirror an `.mcp.json` mcpServers
-// entry, plus agent-shell options.
+// entry, plus mcp-sh options.
 type Config struct {
 	Name string // namespace command name, e.g. "blender-mcp"
 
@@ -190,7 +190,7 @@ func (s *Server) connected(ctx context.Context) (*mcp.ClientSession, error) {
 	if version == "" {
 		version = "dev"
 	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "agent-shell", Version: version}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "mcp-sh", Version: version}, nil)
 	session, err := client.Connect(connectCtx, t, nil)
 	if err != nil {
 		return nil, s.withStderr(fmt.Errorf("connect: %w", err))

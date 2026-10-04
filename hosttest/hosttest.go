@@ -1,5 +1,5 @@
 // Package hosttest is an in-process host speaking the host protocol, for tests of
-// agent-shell itself and of host binaries' Go-side builtins. It is also the smallest
+// mcp-sh itself and of host binaries' Go-side builtins. It is also the smallest
 // complete reference for what a host must implement.
 package hosttest
 
@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"sync"
 
-	"github.com/brohd11/agent-shell/host"
+	"github.com/brohd11/mcp-sh/host"
 )
 
 // Handler answers one invoke.

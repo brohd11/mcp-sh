@@ -1,9 +1,9 @@
-// Package host is the server side of the host protocol: the link between agent-shell
+// Package host is the server side of the host protocol: the link between mcp-sh
 // and the program that implements commands (Godot, Blender, ...).
 //
 // # Protocol v1
 //
-// The host listens on a loopback TCP port. agent-shell connects, writes one JSON
+// The host listens on a loopback TCP port. mcp-sh connects, writes one JSON
 // request line, reads one JSON response line, and closes. Every request carries the
 // optional shared-secret token.
 //
@@ -22,7 +22,7 @@
 //
 // `help` is only asked for commands whose hello entry has no help text, so a host can
 // keep hello small and serve full help lazily. A host without it just answers with an
-// error, and the summary is shown instead. agent-shell never invokes `cmd --help` to
+// error, and the summary is shown instead. mcp-sh never invokes `cmd --help` to
 // get help: a command that ignored the flag would run for real.
 package host
 

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/brohd11/agent-shell/engine"
+	"github.com/brohd11/mcp-sh/engine"
 )
 
 // DefaultMaxStdin caps how much piped input is forwarded to one host invoke.

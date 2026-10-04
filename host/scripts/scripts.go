@@ -31,9 +31,9 @@ import (
 	"github.com/itchyny/gojq"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/brohd11/agent-shell/engine"
-	"github.com/brohd11/agent-shell/host"
-	"github.com/brohd11/agent-shell/host/mcphost"
+	"github.com/brohd11/mcp-sh/engine"
+	"github.com/brohd11/mcp-sh/host"
+	"github.com/brohd11/mcp-sh/host/mcphost"
 )
 
 // Lang knows how to recognize and prepare scripts in one language.
@@ -169,7 +169,7 @@ func filter(ctx context.Context, code *gojq.Code, text string) (string, error) {
 
 // Dir is one folder of scripts. Later dirs override earlier ones by command name.
 type Dir struct {
-	Label string // shown in help, e.g. "~/.agent-shell/blender/commands"
+	Label string // shown in help, e.g. "~/.mcp-sh/blender/commands"
 	FS    fs.FS
 	// Required marks a folder the user named explicitly (commandDirs): a missing one is
 	// reported in the source label instead of being skipped silently.
@@ -427,17 +427,17 @@ func luauWrap(args []string, stdin, cwd, body, lib string) string {
 		quoted[i] = luaQuote(a)
 	}
 	prelude := fmt.Sprintf(`local ARGS = {%s}; local STDIN = %s; local CWD = %s; local lib = {}; `+
-		`local __agent_shell_out = {}; `+
-		`local function print(...) local parts = table.pack(...); for i = 1, parts.n do parts[i] = tostring(parts[i]) end; table.insert(__agent_shell_out, table.concat(parts, "\t")) end; `+
-		`local __agent_shell_main = function() `, strings.Join(quoted, ", "), luaQuote(stdin), luaQuote(cwd))
+		`local __mcp_sh_out = {}; `+
+		`local function print(...) local parts = table.pack(...); for i = 1, parts.n do parts[i] = tostring(parts[i]) end; table.insert(__mcp_sh_out, table.concat(parts, "\t")) end; `+
+		`local __mcp_sh_main = function() `, strings.Join(quoted, ", "), luaQuote(stdin), luaQuote(cwd))
 	return prelude + body + `
 end
 do
 ` + lib + `
 end
-local __agent_shell_ret = __agent_shell_main()
-if __agent_shell_ret ~= nil then table.insert(__agent_shell_out, tostring(__agent_shell_ret)) end
-return table.concat(__agent_shell_out, "\n")`
+local __mcp_sh_ret = __mcp_sh_main()
+if __mcp_sh_ret ~= nil then table.insert(__mcp_sh_out, tostring(__mcp_sh_ret)) end
+return table.concat(__mcp_sh_out, "\n")`
 }
 
 // luaQuote writes a Lua/Luau string literal: escapes for quotes, backslashes and

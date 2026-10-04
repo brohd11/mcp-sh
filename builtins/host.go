@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/brohd11/agent-shell/engine"
+	"github.com/brohd11/mcp-sh/engine"
 )
 
 // Host returns the `host` command, which runs a host command by name even when a

@@ -12,7 +12,7 @@ import (
 
 	"github.com/itchyny/gojq"
 
-	"github.com/brohd11/agent-shell/engine"
+	"github.com/brohd11/mcp-sh/engine"
 )
 
 var jqCmd = command("jq", "filter JSON (gojq)",

@@ -10,10 +10,10 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/brohd11/agent-shell/host"
-	"github.com/brohd11/agent-shell/host/mcphost"
-	"github.com/brohd11/agent-shell/host/scripts"
-	"github.com/brohd11/agent-shell/profile"
+	"github.com/brohd11/mcp-sh/host"
+	"github.com/brohd11/mcp-sh/host/mcphost"
+	"github.com/brohd11/mcp-sh/host/scripts"
+	"github.com/brohd11/mcp-sh/profile"
 )
 
 func opts(t *testing.T) profile.Options {
@@ -86,7 +86,7 @@ func TestEnvExpansion(t *testing.T) {
 
 func TestHomeProjectDirListedOnce(t *testing.T) {
 	home := t.TempDir()
-	o := profile.Options{ConfigDir: filepath.Join(home, ".agent-shell"), ProjectDir: home}
+	o := profile.Options{ConfigDir: filepath.Join(home, ".mcp-sh"), ProjectDir: home}
 	l, err := profile.Load(blender, o)
 	if err != nil {
 		t.Fatal(err)
@@ -200,14 +200,14 @@ func TestValidation(t *testing.T) {
 
 func TestEditing(t *testing.T) {
 	o := opts(t)
-	path, created, err := profile.EnsureUserConfig("blender", "blender-shell", o)
+	path, created, err := profile.EnsureUserConfig("blender", "mcp-sh-blender", o)
 	if err != nil || !created {
 		t.Fatal(created, err)
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "commands")); err != nil {
 		t.Fatal("commands dir not created")
 	}
-	if _, created, _ := profile.EnsureUserConfig("blender", "blender-shell", o); created {
+	if _, created, _ := profile.EnsureUserConfig("blender", "mcp-sh-blender", o); created {
 		t.Fatal("overwrote existing config")
 	}
 	// Keys the editor does not model survive edits.
@@ -292,7 +292,7 @@ func TestCommandDirs(t *testing.T) {
 		{filepath.Join(home, "rbx"), true}, // its duplicate, ~/rbx/../rbx, is dropped
 		{rooted, true},                     // C:\opt\tools\blender on Windows
 		{filepath.Join(userDir, "mine"), true},
-		{filepath.Join(o.ProjectDir, ".agent-shell", "blender", "commands"), false},
+		{filepath.Join(o.ProjectDir, ".mcp-sh", "blender", "commands"), false},
 		{filepath.Join(o.ProjectDir, "tools", "commands"), true},
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -380,7 +380,7 @@ func TestExecTemplateAndImageDir(t *testing.T) {
 
 func TestHostExec(t *testing.T) {
 	app := profile.App{Name: "gimp", FS: fstest.MapFS{"config.json": {Data: []byte(`{
-		"host": {"address": "127.0.0.1:${GIMP_SHELL_PORT:-9520}", "exec": {"command": "python", "lang": "python"}}
+		"host": {"address": "127.0.0.1:${MCP_SH_GIMP_PORT:-9520}", "exec": {"command": "python", "lang": "python"}}
 	}`)}}}
 	o := opts(t)
 	// A user layer that only changes the address keeps the built-in exec.

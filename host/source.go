@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/brohd11/agent-shell/engine"
+	"github.com/brohd11/mcp-sh/engine"
 )
 
 // Source supplies shell commands: the native TCP host, an upstream MCP server, a folder

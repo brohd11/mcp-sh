@@ -212,7 +212,7 @@ func projectKey(claude, projectDir string) string {
 }
 
 // readServers decodes the mcpServers map found under the given key path. Entries are
-// decoded leniently: fields agent-shell does not use are ignored.
+// decoded leniently: fields mcp-sh does not use are ignored.
 func readServers(path string, keys []string) map[string]*Server {
 	data, err := os.ReadFile(path)
 	if err != nil {

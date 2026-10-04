@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brohd11/agent-shell/builtins"
-	"github.com/brohd11/agent-shell/engine"
-	"github.com/brohd11/agent-shell/engine/shengine"
+	"github.com/brohd11/mcp-sh/builtins"
+	"github.com/brohd11/mcp-sh/engine"
+	"github.com/brohd11/mcp-sh/engine/shengine"
 )
 
 // upper is a stand-in host command: it upper-cases stdin and echoes its args.
@@ -189,8 +189,8 @@ func TestTimeout(t *testing.T) {
 }
 
 func TestEnvironmentIsolated(t *testing.T) {
-	t.Setenv("AGENT_SHELL_TEST_SECRET", "hunter2")
-	r := run(t, shengine.Options{Env: []string{"FOO=bar"}}, `echo "$AGENT_SHELL_TEST_SECRET|$FOO|$PATH"`)
+	t.Setenv("MCP_SH_TEST_SECRET", "hunter2")
+	r := run(t, shengine.Options{Env: []string{"FOO=bar"}}, `echo "$MCP_SH_TEST_SECRET|$FOO|$PATH"`)
 	if r.out != "|bar|\n" {
 		t.Fatalf("got %q", r.out)
 	}

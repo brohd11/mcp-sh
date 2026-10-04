@@ -13,11 +13,11 @@ import (
 	"github.com/itchyny/gojq"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/brohd11/agent-shell/engine/shengine"
-	"github.com/brohd11/agent-shell/host"
-	"github.com/brohd11/agent-shell/host/scripts"
-	"github.com/brohd11/agent-shell/hosttest"
-	"github.com/brohd11/agent-shell/shell"
+	"github.com/brohd11/mcp-sh/engine/shengine"
+	"github.com/brohd11/mcp-sh/host"
+	"github.com/brohd11/mcp-sh/host/scripts"
+	"github.com/brohd11/mcp-sh/hosttest"
+	"github.com/brohd11/mcp-sh/shell"
 )
 
 // fakeExec mimics blender-mcp's execute_blender_code: success is prefixed text, and
@@ -159,8 +159,8 @@ func TestLuauPrelude(t *testing.T) {
 	for _, want := range []string{
 		`local ARGS = {"q\"uote", "back\\slash", "é"}; local STDIN = "tab\there\001"; local CWD = "/"; `,
 		"local function print(...)",
-		"local __agent_shell_main = function() -- summary: say hi\nprint('hi')\n\nend\ndo\n\nend\nlocal __agent_shell_ret = __agent_shell_main()",
-		"return table.concat(__agent_shell_out, \"\\n\")",
+		"local __mcp_sh_main = function() -- summary: say hi\nprint('hi')\n\nend\ndo\n\nend\nlocal __mcp_sh_ret = __mcp_sh_main()",
+		"return table.concat(__mcp_sh_out, \"\\n\")",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)

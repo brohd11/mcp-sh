@@ -7,11 +7,11 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/brohd11/agent-shell/engine/shengine"
-	"github.com/brohd11/agent-shell/host"
-	"github.com/brohd11/agent-shell/hosttest"
-	"github.com/brohd11/agent-shell/mcpserver"
-	"github.com/brohd11/agent-shell/shell"
+	"github.com/brohd11/mcp-sh/engine/shengine"
+	"github.com/brohd11/mcp-sh/host"
+	"github.com/brohd11/mcp-sh/hosttest"
+	"github.com/brohd11/mcp-sh/mcpserver"
+	"github.com/brohd11/mcp-sh/shell"
 )
 
 func connect(t *testing.T, client *host.Client) *mcp.ClientSession {
@@ -19,7 +19,7 @@ func connect(t *testing.T, client *host.Client) *mcp.ClientSession {
 	ctx := context.Background()
 	sh := &shell.Shell{Sources: []host.Source{client}, Engine: shengine.New(shengine.Options{})}
 	server := mcpserver.New(sh, mcpserver.Options{
-		Name: "agent-shell-test", Version: "v0", Title: "the test host",
+		Name: "mcp-sh-test", Version: "v0", Title: "the test host",
 		Instructions: "Host-specific tip.",
 	})
 	st, ct := mcp.NewInMemoryTransports()

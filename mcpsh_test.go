@@ -1,4 +1,4 @@
-package agentshell
+package mcpsh
 
 import (
 	"bytes"
@@ -17,15 +17,15 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/brohd11/agent-shell/host"
-	"github.com/brohd11/agent-shell/hosttest"
-	"github.com/brohd11/agent-shell/profile"
+	"github.com/brohd11/mcp-sh/host"
+	"github.com/brohd11/mcp-sh/hosttest"
+	"github.com/brohd11/mcp-sh/profile"
 )
 
 // TestMain doubles as a stdio MCP server, so configs can start this test binary as a
 // real upstream subprocess.
 func TestMain(m *testing.M) {
-	if os.Getenv("AGENT_SHELL_FAKE_MCP") == "1" {
+	if os.Getenv("MCP_SH_FAKE_MCP") == "1" {
 		serveFakeMCP()
 		return
 	}
@@ -69,7 +69,7 @@ type env struct {
 }
 
 func newEnv(t *testing.T) *env {
-	t.Setenv("AGENT_SHELL_TIMEOUT", "")
+	t.Setenv("MCP_SH_TIMEOUT", "")
 	o := profile.Options{ConfigDir: t.TempDir(), ProjectDir: t.TempDir()}
 	return &env{t: t, opts: o, cfg: Config{
 		Name: "test-shell", App: "test", Version: "v1.2.3", Options: o,
@@ -139,7 +139,7 @@ func fakeMCPEntry(t *testing.T, extraEnv string) string {
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal(exe)
-	return fmt.Sprintf(`{"command": %s, "env": {"AGENT_SHELL_FAKE_MCP": "1"%s},
+	return fmt.Sprintf(`{"command": %s, "env": {"MCP_SH_FAKE_MCP": "1"%s},
 		"defaults": {"user_prompt": ""},
 		"exec": {"tool": "execute_blender_code", "param": "code", "lang": "python",
 		         "outputPrefix": "Code executed successfully: ", "errorPrefix": "Error executing code: "}}`, b, extraEnv)
@@ -325,8 +325,8 @@ func TestCLIErrors(t *testing.T) {
 	if _, errOut, code := e.run("", "bogus"); code != 2 || !strings.Contains(errOut, "unknown command") {
 		t.Fatalf("bogus: %q", errOut)
 	}
-	t.Setenv("AGENT_SHELL_TIMEOUT", "soon")
-	if _, errOut, code := e.run("", "run", "true"); code != 2 || !strings.Contains(errOut, "AGENT_SHELL_TIMEOUT") {
+	t.Setenv("MCP_SH_TIMEOUT", "soon")
+	if _, errOut, code := e.run("", "run", "true"); code != 2 || !strings.Contains(errOut, "MCP_SH_TIMEOUT") {
 		t.Fatalf("bad timeout: %q", errOut)
 	}
 }
@@ -358,7 +358,7 @@ func TestTimeoutEnv(t *testing.T) {
 	e := newEnv(t)
 	addr := startHost(t)
 	e.writeUserConfig(`{"host": {"address": "` + addr + `", "token": "tok"}}`)
-	t.Setenv("AGENT_SHELL_TIMEOUT", "1")
+	t.Setenv("MCP_SH_TIMEOUT", "1")
 	_, errOut, code := e.run("", "run", "while true; do :; done")
 	if code != 124 || !strings.Contains(errOut, "timed out after 1s") {
 		t.Fatalf("got %q %d", errOut, code)

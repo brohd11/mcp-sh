@@ -3,9 +3,9 @@ package profile
 import (
 	"regexp"
 
-	"github.com/brohd11/agent-shell/host"
-	"github.com/brohd11/agent-shell/host/mcphost"
-	"github.com/brohd11/agent-shell/host/scripts"
+	"github.com/brohd11/mcp-sh/host"
+	"github.com/brohd11/mcp-sh/host/mcphost"
+	"github.com/brohd11/mcp-sh/host/scripts"
 )
 
 // Sources builds the config's command sources in precedence order: the native host,

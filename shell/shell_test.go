@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/brohd11/agent-shell/engine/shengine"
-	"github.com/brohd11/agent-shell/host"
-	"github.com/brohd11/agent-shell/hosttest"
-	"github.com/brohd11/agent-shell/shell"
+	"github.com/brohd11/mcp-sh/engine/shengine"
+	"github.com/brohd11/mcp-sh/host"
+	"github.com/brohd11/mcp-sh/hosttest"
+	"github.com/brohd11/mcp-sh/shell"
 )
 
 func fakeGodot() *hosttest.Host {

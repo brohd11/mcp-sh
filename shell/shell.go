@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/brohd11/agent-shell/builtins"
-	"github.com/brohd11/agent-shell/engine"
-	"github.com/brohd11/agent-shell/host"
+	"github.com/brohd11/mcp-sh/builtins"
+	"github.com/brohd11/mcp-sh/engine"
+	"github.com/brohd11/mcp-sh/host"
 )
 
 const (

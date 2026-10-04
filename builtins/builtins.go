@@ -14,7 +14,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/brohd11/agent-shell/engine"
+	"github.com/brohd11/mcp-sh/engine"
 )
 
 // All returns the generic builtins. help and host are built per run (see Registry).

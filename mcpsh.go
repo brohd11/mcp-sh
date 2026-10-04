@@ -1,4 +1,4 @@
-// Package agentshell is the CLI and MCP server behind an app's shell binary: a sandboxed
+// Package mcpsh is the CLI and MCP server behind an app's shell binary: a sandboxed
 // bash shell over a running program, built from the app's layered config (see package
 // profile). Each app is its own module and binary that embeds its config.json and
 // commands/ and calls Main:
@@ -7,11 +7,11 @@
 //	var appFS embed.FS
 //
 //	func main() {
-//		agentshell.Main(agentshell.Config{Name: "blender-shell", App: "blender", FS: appFS})
+//		mcpsh.Main(mcpsh.Config{Name: "mcp-sh-blender", App: "blender", FS: appFS})
 //	}
 //
 // `<binary> setup` registers it with Claude Code and prints what the app needs.
-package agentshell
+package mcpsh
 
 import (
 	"context"
@@ -31,12 +31,12 @@ import (
 	"github.com/brohd11/goutil/shellquote"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/brohd11/agent-shell/builtins"
-	"github.com/brohd11/agent-shell/engine"
-	"github.com/brohd11/agent-shell/engine/shengine"
-	"github.com/brohd11/agent-shell/mcpserver"
-	"github.com/brohd11/agent-shell/profile"
-	"github.com/brohd11/agent-shell/shell"
+	"github.com/brohd11/mcp-sh/builtins"
+	"github.com/brohd11/mcp-sh/engine"
+	"github.com/brohd11/mcp-sh/engine/shengine"
+	"github.com/brohd11/mcp-sh/mcpserver"
+	"github.com/brohd11/mcp-sh/profile"
+	"github.com/brohd11/mcp-sh/shell"
 )
 
 // Builtin is a Go-side command an app binary adds to its shell.
@@ -45,7 +45,7 @@ type Builtin = engine.Command
 // Invocation is one call of a Builtin.
 type Invocation = engine.Invocation
 
-// Subcommand is an app-specific CLI verb, such as godot-shell's `addon`. Core verbs win
+// Subcommand is an app-specific CLI verb, such as mcp-sh-godot's `addon`. Core verbs win
 // over a Subcommand of the same name.
 type Subcommand struct {
 	Name    string // first argument that selects it, e.g. "addon"
@@ -56,8 +56,8 @@ type Subcommand struct {
 }
 
 type Config struct {
-	Name    string // binary and MCP server name, e.g. "blender-shell"
-	App     string // config folder name, e.g. "blender" for ~/.agent-shell/blender/ (default: Name)
+	Name    string // binary and MCP server name, e.g. "mcp-sh-blender"
+	App     string // config folder name, e.g. "blender" for ~/.mcp-sh/blender/ (default: Name)
 	Version string
 	// UpdateRepo ("owner/repo") enables `update` via GitHub releases.
 	UpdateRepo string
@@ -90,7 +90,7 @@ func (c *cli) eprintf(format string, a ...any) { fmt.Fprintf(c.stderr, format, a
 
 func run(cfg Config, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if cfg.Name == "" {
-		cfg.Name = "agent-shell"
+		cfg.Name = "mcp-sh"
 	}
 	if cfg.App == "" {
 		cfg.App = cfg.Name
@@ -181,9 +181,9 @@ Options:
 
 Config:
   user      %[1]s  (+ commands/)
-  project   %[2]s  (+ .agent-shell/%[3]s/commands/)
-Environment: AGENT_SHELL_CONFIG_DIR, AGENT_SHELL_TIMEOUT (seconds)
-`, profile.UserConfigPath(app, c.cfg.Options), filepath.Join(".agent-shell", app+".json"), app)
+  project   %[2]s  (+ .mcp-sh/%[3]s/commands/)
+Environment: MCP_SH_CONFIG_DIR, MCP_SH_TIMEOUT (seconds)
+`, profile.UserConfigPath(app, c.cfg.Options), filepath.Join(".mcp-sh", app+".json"), app)
 	return b.String()
 }
 
@@ -215,10 +215,10 @@ func (c *cli) newShell(l *profile.Loaded) (*shell.Shell, error) {
 		root = abs
 	}
 	timeout := time.Duration(p.Timeout) * time.Second
-	if s := os.Getenv("AGENT_SHELL_TIMEOUT"); s != "" {
+	if s := os.Getenv("MCP_SH_TIMEOUT"); s != "" {
 		secs, err := strconv.Atoi(s)
 		if err != nil || secs <= 0 {
-			return nil, fmt.Errorf("AGENT_SHELL_TIMEOUT: expected a positive number of seconds, got %q", s)
+			return nil, fmt.Errorf("MCP_SH_TIMEOUT: expected a positive number of seconds, got %q", s)
 		}
 		timeout = time.Duration(secs) * time.Second
 	}
@@ -226,7 +226,7 @@ func (c *cli) newShell(l *profile.Loaded) (*shell.Shell, error) {
 		Sources: sources,
 		Engine: shengine.New(shengine.Options{
 			Root: root,
-			Env:  []string{"HOME=/", "AGENT_SHELL=" + c.cfg.Name, "AGENT_SHELL_APP=" + l.Name},
+			Env:  []string{"HOME=/", "MCP_SH=" + c.cfg.Name, "MCP_SH_APP=" + l.Name},
 		}),
 		Extra:     c.cfg.Builtins,
 		Timeout:   timeout,

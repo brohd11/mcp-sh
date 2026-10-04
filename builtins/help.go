@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/brohd11/agent-shell/engine"
+	"github.com/brohd11/mcp-sh/engine"
 )
 
 // Help returns the `help` command over reg: `help` lists every command, `help NAME`

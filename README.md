@@ -1,4 +1,4 @@
-# agent-shell
+# mcp-sh
 
 Give an agent a **sandboxed bash shell over a running program** (Godot, Blender, Roblox
 Studio, ...), served over MCP. The agent gets three tools, `run`, `list_commands` and
@@ -10,15 +10,15 @@ config embedded:
 
 | App | Repo | Talks to |
 |---|---|---|
-| Blender | [blender-shell](https://github.com/brohd11/blender-shell) | `uvx blender-mcp` + Python script commands |
-| Roblox Studio | [roblox-shell](https://github.com/brohd11/roblox-shell) | Studio's built-in MCP server + Luau editing commands |
-| GIMP | [gimp-shell](https://github.com/brohd11/gimp-shell) | its own plug-in (native host) + Python script commands |
-| Godot | [godot-shell](https://github.com/brohd11/godot-shell) | its own editor addon (native host) |
+| Blender | [mcp-sh-blender](https://github.com/brohd11/mcp-sh-blender) | `uvx blender-mcp` + Python script commands |
+| Roblox Studio | [mcp-sh-roblox](https://github.com/brohd11/mcp-sh-roblox) | Studio's built-in MCP server + Luau editing commands |
+| GIMP | [mcp-sh-gimp](https://github.com/brohd11/mcp-sh-gimp) | its own plug-in (native host) + Python script commands |
+| Godot | [mcp-sh-godot](https://github.com/brohd11/mcp-sh-godot) | its own editor addon (native host) |
 
 An app's **config** decides what the shell talks to:
 
 ```
-agent ──MCP──> blender-shell
+agent ──MCP──> mcp-sh-blender
                 ├─ blender-mcp <tool> [--flags]   an existing MCP server, its tools as subcommands
                 ├─ other-mcp <tool> ...           any number of upstream servers
                 ├─ <host commands>                optional native host (the Godot bridge), top level
@@ -27,9 +27,9 @@ agent ──MCP──> blender-shell
 ```
 
 ```sh
-blender-shell run 'objects MESH | jq -r .name | pick'
-blender-shell run 'blender-mcp get_object_info Cube | jq .location'
-godot-shell   run 'tree root | tree nodes --recursive | grep -c Camera'
+mcp-sh-blender run 'objects MESH | jq -r .name | pick'
+mcp-sh-blender run 'blender-mcp get_object_info Cube | jq .location'
+mcp-sh-godot   run 'tree root | tree nodes --recursive | grep -c Camera'
 ```
 
 ## Building an app
@@ -42,7 +42,7 @@ package main
 import (
 	"embed"
 
-	"github.com/brohd11/agent-shell"
+	"github.com/brohd11/mcp-sh"
 )
 
 // Directory embeds skip files starting with "_": list command libraries explicitly.
@@ -53,14 +53,14 @@ var appFS embed.FS
 var version = "dev" // -ldflags "-X main.version=..."
 
 func main() {
-	agentshell.Main(agentshell.Config{
-		Name:       "roblox-shell",          // binary and MCP server name
-		App:        "roblox",                // config folder: ~/.agent-shell/roblox/
+	mcpsh.Main(mcpsh.Config{
+		Name:       "mcp-sh-roblox",          // binary and MCP server name
+		App:        "roblox",                // config folder: ~/.mcp-sh/roblox/
 		Version:    version,
-		UpdateRepo: "brohd11/roblox-shell",  // enables `update` via GitHub releases
+		UpdateRepo: "brohd11/mcp-sh-roblox",  // enables `update` via GitHub releases
 		FS:         appFS,
 		// Builtins: Go-side commands, which win over every other command source.
-		// Subcommands: extra CLI verbs, e.g. godot-shell's `addon install`.
+		// Subcommands: extra CLI verbs, e.g. mcp-sh-godot's `addon install`.
 	})
 }
 ```
@@ -76,13 +76,13 @@ them, so they build against the local core.
 Every binary has the same CLI:
 
 ```sh
-blender-shell setup              # user config + `claude mcp add -s user blender-shell -- <path>`
-blender-shell commands           # check what the shell can reach
-blender-shell run SCRIPT         # one run, "-" reads the script from stdin
-blender-shell                    # the MCP server over stdio
+mcp-sh-blender setup              # user config + `claude mcp add -s user mcp-sh-blender -- <path>`
+mcp-sh-blender commands           # check what the shell can reach
+mcp-sh-blender run SCRIPT         # one run, "-" reads the script from stdin
+mcp-sh-blender                    # the MCP server over stdio
 ```
 
-`setup` creates `~/.agent-shell/blender/` (config overrides and `commands/`),
+`setup` creates `~/.mcp-sh/blender/` (config overrides and `commands/`),
 registers the server with Claude Code (`--scope`, `--name`, or `--print` to only print the
 command), and lists what the app itself needs. Each app is its own MCP server
 registration, so each one can be turned on and off independently.
@@ -99,12 +99,12 @@ layers winning:
 | Layer | Config | Script commands |
 |---|---|---|
 | built-in | embedded `config.json` | embedded `commands/` |
-| user | `~/.agent-shell/<app>/config.json` | `~/.agent-shell/<app>/commands/` |
-| project | `./.agent-shell/<app>.json` | `./.agent-shell/<app>/commands/` |
+| user | `~/.mcp-sh/<app>/config.json` | `~/.mcp-sh/<app>/commands/` |
+| project | `./.mcp-sh/<app>.json` | `./.mcp-sh/<app>/commands/` |
 
-`AGENT_SHELL_CONFIG_DIR` moves the user folder (default `~/.agent-shell`).
+`MCP_SH_CONFIG_DIR` moves the user folder (default `~/.mcp-sh`).
 
-The format is `.mcp.json`'s `mcpServers` plus agent-shell keys:
+The format is `.mcp.json`'s `mcpServers` plus mcp-sh keys:
 
 ```json
 {
@@ -150,11 +150,11 @@ The format is `.mcp.json`'s `mcpServers` plus agent-shell keys:
 Managing servers (writes the user config, or the project config with `--project`):
 
 ```sh
-godot-shell mcp add godot-mcp -- npx -y some-godot-mcp
-godot-shell mcp add remote --url http://localhost:8000/mcp --header "Authorization: Bearer x"
-blender-shell mcp import blender     # copy an entry from .mcp.json / ~/.claude.json
-blender-shell mcp list | remove NAME
-blender-shell config path | show
+mcp-sh-godot mcp add godot-mcp -- npx -y some-godot-mcp
+mcp-sh-godot mcp add remote --url http://localhost:8000/mcp --header "Authorization: Bearer x"
+mcp-sh-blender mcp import blender     # copy an entry from .mcp.json / ~/.claude.json
+mcp-sh-blender mcp list | remove NAME
+mcp-sh-blender config path | show
 ```
 
 ## Upstream MCP servers as commands
@@ -177,7 +177,7 @@ calling. Text results go to stdout; with no text, structured content is printed 
 JSON. `isError` results, and results matching `errorPattern`, go to stderr with exit 1.
 `-` and `_` are interchangeable in tool and parameter names.
 
-Images in a result (a screenshot, a render) are saved to `~/.agent-shell/<app>/images/`
+Images in a result (a screenshot, a render) are saved to `~/.mcp-sh/<app>/images/`
 and printed as their path, one per line, so the agent can open them with its own tools
 (`blender-mcp get_viewport_screenshot | tail -1`). The folder keeps the newest 50 images.
 
@@ -227,9 +227,9 @@ re-read on every run, so edits apply immediately. Names that are bash keywords (
 Keep your own commands wherever suits you, such as a git repo, and point the app at it:
 
 ```sh
-roblox-shell commands add ~/code/roblox-tools             # user config
-roblox-shell commands add ./tools/roblox --project        # this project's config
-roblox-shell commands remove ~/code/roblox-tools
+mcp-sh-roblox commands add ~/code/roblox-tools             # user config
+mcp-sh-roblox commands add ./tools/roblox --project        # this project's config
+mcp-sh-roblox commands remove ~/code/roblox-tools
 ```
 
 That edits `commandDirs` in the config. Entries expand `${VAR}` and `~/`, and a relative
@@ -237,8 +237,8 @@ entry is relative to the config file's folder. Folders are searched in this orde
 ones winning when two scripts share a name:
 
 1. the built-in `commands/`
-2. `~/.agent-shell/<app>/commands/`, then the user config's `commandDirs`
-3. `./.agent-shell/<app>/commands/`, then the project config's `commandDirs`
+2. `~/.mcp-sh/<app>/commands/`, then the user config's `commandDirs`
+3. `./.mcp-sh/<app>/commands/`, then the project config's `commandDirs`
 
 A script that replaces one from an earlier folder still works, but its listing says so:
 `query  my query (overrides the one in built-in roblox commands)`. A `commandDirs` folder
@@ -248,7 +248,7 @@ that doesn't exist is reported in the `commands` source list (`missing: ...`) an
 ## Native hosts
 
 A program with no MCP server can speak the small host protocol directly. The program
-listens on loopback TCP, and agent-shell connects once per request: one JSON line out,
+listens on loopback TCP, and mcp-sh connects once per request: one JSON line out,
 one JSON line back.
 
 ```json
@@ -267,7 +267,7 @@ one JSON line back.
 - Invokes to one host are serialized.
 
 `hosttest/` is a complete host in about 100 lines. The Godot implementation is
-godot-shell's `addon/godot_shell/bridge.gd`.
+mcp-sh-godot's `addon/mcp_sh_godot/bridge.gd`.
 
 A host can also run script commands. Give it a command that executes code from its stdin,
 and point `host.exec` at it:
@@ -279,12 +279,12 @@ and point `host.exec` at it:
 Each script command is then sent to that host command, wrapped as usual (`ARGS`, `STDIN`,
 `CWD`, the `_lib`), and the host's stdout, stderr and exit code are passed through as they
 are. That keeps what a script printed before it failed, and needs none of the MCP binding's
-prefix or jq options. gimp-shell's bridge (`plugin/gimp-shell-bridge/gimp-shell-bridge.py`)
+prefix or jq options. mcp-sh-gimp's bridge (`plugin/mcp-sh-gimp-bridge/mcp-sh-gimp-bridge.py`)
 works this way. A script's `server:` line names a host binding as `host`.
 
 ## Sandbox and trust model
 
-The **shell** is fixed by agent-shell, whatever the app's config:
+The **shell** is fixed by mcp-sh, whatever the app's config:
 
 - **No processes.** Only registered commands run. Absolute paths, `exec`, `eval`, `PATH=`
   and the like fail with 127. The interpreter's OS exec handler is never called.
@@ -297,7 +297,7 @@ The **shell** is fixed by agent-shell, whatever the app's config:
 **Commands are as powerful as their source.** Upstream MCP servers and native hosts act
 with the app's permissions: `execute_blender_code`, Roblox's `execute_luau` and the Godot
 console's `expr` run arbitrary code inside the app, and Godot's `ls`/`cat` accept paths
-outside the project. Upstream servers are processes agent-shell starts from your config
+outside the project. Upstream servers are processes mcp-sh starts from your config
 (never from the agent). The sandbox stops the shell from being an escape hatch; it does
 not make a powerful app safe. Use `hideTools` to drop tools you don't want reachable.
 
@@ -305,7 +305,7 @@ not make a powerful app safe. Use `hideTools` to drop tools you don't want reach
 
 | Path | What |
 |---|---|
-| `agentshell.go` | CLI every app binary shares: serve, run, commands, setup, mcp, config, update |
+| `mcpsh.go` | CLI every app binary shares: serve, run, commands, setup, mcp, config, update |
 | `profile/` | config schema, layering (app-embedded, user, project), editing, import |
 | `host/` | `Source` interface; native host protocol + TCP client |
 | `host/mcphost` | upstream MCP server as a namespaced command (go-sdk client) |

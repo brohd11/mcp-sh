@@ -9,12 +9,12 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/brohd11/agent-shell/builtins"
-	"github.com/brohd11/agent-shell/shell"
+	"github.com/brohd11/mcp-sh/builtins"
+	"github.com/brohd11/mcp-sh/shell"
 )
 
 type Options struct {
-	Name    string // MCP server name, e.g. "agent-shell-godot"
+	Name    string // MCP server name, e.g. "mcp-sh-godot"
 	Version string
 	// Title names the host for the agent, e.g. "the live Godot editor".
 	Title string

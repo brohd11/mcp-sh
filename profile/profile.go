@@ -1,16 +1,16 @@
 // Package profile describes one app's shell: an optional native host, upstream MCP
 // servers, script commands and limits. The config is JSON in the shape of `.mcp.json`
-// (an "mcpServers" map) plus agent-shell keys, layered:
+// (an "mcpServers" map) plus mcp-sh keys, layered:
 //
 //	built-in   embedded in the app's binary (App.FS: config.json, commands/)
 //	user       <config dir>/<app>/config.json and <config dir>/<app>/commands/
-//	project    <project>/.agent-shell/<app>.json and <project>/.agent-shell/<app>/commands/
+//	project    <project>/.mcp-sh/<app>.json and <project>/.mcp-sh/<app>/commands/
 //
 // Later layers win: scalar keys override and command folders stack. mcpServers entries
 // merge by name: giving any transport key (type, command, args, env, url, headers)
 // replaces the transport as a unit, while exec, defaults, hideTools and disabled
 // override individually, so pointing a built-in server at another command keeps its
-// agent-shell options. Strings in host, mcpServers and root expand ${VAR} and
+// mcp-sh options. Strings in host, mcpServers and root expand ${VAR} and
 // ${VAR:-default}.
 package profile
 
@@ -26,13 +26,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/brohd11/agent-shell/host/mcphost"
-	"github.com/brohd11/agent-shell/host/scripts"
+	"github.com/brohd11/mcp-sh/host/mcphost"
+	"github.com/brohd11/mcp-sh/host/scripts"
 )
 
 // App is the built-in layer an app's binary embeds.
 type App struct {
-	Name string // config folder: <config dir>/<Name>/, <project>/.agent-shell/<Name>.json
+	Name string // config folder: <config dir>/<Name>/, <project>/.mcp-sh/<Name>.json
 	// FS holds config.json and an optional commands/ folder; nil means no built-in
 	// layer. Directory embeds skip files starting with "_", so embed command
 	// libraries (commands/_lib.*) explicitly.
@@ -58,14 +58,14 @@ type Profile struct {
 	MaxOutput int    `json:"maxOutput,omitempty"` // per-stream output cap, bytes
 }
 
-// Host is a native agent-shell host (the TCP host protocol), like the Godot bridge.
+// Host is a native mcp-sh host (the TCP host protocol), like the Godot bridge.
 type Host struct {
 	Address  string `json:"address,omitempty"` // "127.0.0.1:9510"
 	Token    string `json:"token,omitempty"`
 	Hint     string `json:"hint,omitempty"` // shown when the host is unreachable
 	Disabled bool   `json:"disabled,omitempty"`
 	// Exec runs script commands through a host command that executes code from its
-	// stdin, like gimp-shell's bridge `python`.
+	// stdin, like mcp-sh-gimp's bridge `python`.
 	Exec *HostExec `json:"exec,omitempty"`
 }
 
@@ -75,7 +75,7 @@ type HostExec struct {
 	Lang    string `json:"lang"`    // "python" or "luau"
 }
 
-// Server is an upstream MCP server: an `.mcp.json` entry plus agent-shell options.
+// Server is an upstream MCP server: an `.mcp.json` entry plus mcp-sh options.
 type Server struct {
 	Type    string            `json:"type,omitempty"` // stdio (default with command), http, sse
 	Command string            `json:"command,omitempty"`
@@ -132,21 +132,21 @@ type Loaded struct {
 }
 
 type Options struct {
-	ProjectDir string // where to look for .agent-shell/; empty: the working directory
+	ProjectDir string // where to look for .mcp-sh/; empty: the working directory
 	ConfigDir  string // user config dir; empty: ConfigDir()
 }
 
 // ConfigDir is the user-level config folder shared by all apps:
-// $AGENT_SHELL_CONFIG_DIR, else ~/.agent-shell.
+// $MCP_SH_CONFIG_DIR, else ~/.mcp-sh.
 func ConfigDir() string {
-	if d := os.Getenv("AGENT_SHELL_CONFIG_DIR"); d != "" {
+	if d := os.Getenv("MCP_SH_CONFIG_DIR"); d != "" {
 		return d
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".", ".agent-shell-config")
+		return filepath.Join(".", ".mcp-sh-config")
 	}
-	return filepath.Join(home, ".agent-shell")
+	return filepath.Join(home, ".mcp-sh")
 }
 
 func (o Options) configDir() string {
@@ -173,7 +173,7 @@ func UserConfigPath(name string, o Options) string {
 
 // ProjectConfigPath is where an app's project-level config lives.
 func ProjectConfigPath(name string, o Options) string {
-	return filepath.Join(o.projectDir(), ".agent-shell", name+".json")
+	return filepath.Join(o.projectDir(), ".mcp-sh", name+".json")
 }
 
 // Layers lists the files an app's config is built from, in precedence order.
