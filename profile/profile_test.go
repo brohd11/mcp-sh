@@ -262,6 +262,7 @@ func TestCommandDirs(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	t.Setenv("TOOLS", "/opt/tools")
+	rooted, _ := filepath.Abs("/opt/tools/blender")
 	o := opts(t)
 	userDir := filepath.Dir(profile.UserConfigPath("blender", o))
 	write(t, profile.UserConfigPath("blender", o), `{"commandDirs": ["~/rbx", "${TOOLS}/blender", "mine", "~/rbx/../rbx"]}`)
@@ -282,7 +283,7 @@ func TestCommandDirs(t *testing.T) {
 		{"built-in blender commands", false},
 		{filepath.Join(userDir, "commands"), false},
 		{filepath.Join(home, "rbx"), true}, // its duplicate, ~/rbx/../rbx, is dropped
-		{"/opt/tools/blender", true},
+		{rooted, true},                     // C:\opt\tools\blender on Windows
 		{filepath.Join(userDir, "mine"), true},
 		{filepath.Join(o.ProjectDir, ".agent-shell", "blender", "commands"), false},
 		{filepath.Join(o.ProjectDir, "tools", "commands"), true},

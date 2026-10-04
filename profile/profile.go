@@ -253,7 +253,8 @@ func Load(app App, o Options) (*Loaded, error) {
 }
 
 // ResolveDir expands ${VAR} and a leading ~/ in a commandDirs entry, and makes a
-// relative path relative to base (the folder of the config file naming it).
+// relative path relative to base (the folder of the config file naming it). A path
+// starting with a slash is rooted: on Windows it is on the current drive.
 func ResolveDir(dir, base string) string {
 	dir = ExpandVars(dir)
 	if dir == "~" || strings.HasPrefix(dir, "~/") || strings.HasPrefix(dir, `~\`) {
@@ -261,7 +262,13 @@ func ResolveDir(dir, base string) string {
 			dir = filepath.Join(home, dir[1:])
 		}
 	}
-	if !filepath.IsAbs(dir) {
+	switch {
+	case filepath.IsAbs(dir):
+	case strings.HasPrefix(dir, "/") || strings.HasPrefix(dir, `\`):
+		if abs, err := filepath.Abs(dir); err == nil {
+			dir = abs
+		}
+	default:
 		dir = filepath.Join(base, dir)
 	}
 	return filepath.Clean(dir)
