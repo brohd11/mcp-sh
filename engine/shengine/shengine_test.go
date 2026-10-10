@@ -203,6 +203,53 @@ func TestHelpIsOurs(t *testing.T) {
 	}
 }
 
+// hostDir is a stand-in host with its own working directory: `cd` sets it, `pwd` prints it.
+func hostDir() []engine.Command {
+	dir := "res://"
+	return []engine.Command{
+		{Name: "cd", Source: "host", Run: func(ctx context.Context, inv *engine.Invocation) int {
+			dir = strings.Join(inv.Args, " ")
+			return 0
+		}},
+		{Name: "pwd", Source: "host", Run: func(ctx context.Context, inv *engine.Invocation) int {
+			io.WriteString(inv.Stdout, "host:"+dir+"\n")
+			return 0
+		}},
+	}
+}
+
+func TestCdAndPwdGoToHostWithoutFiles(t *testing.T) {
+	runWith := func(opts shengine.Options, cmds []engine.Command, script string) result {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var out, errOut bytes.Buffer
+		code, err := shengine.New(opts).Run(ctx, script, builtins.Registry(cmds, nil), engine.IO{Stdout: &out, Stderr: &errOut})
+		return result{out.String(), errOut.String(), code, err}
+	}
+	// No file access and a host cd/pwd: both reach the host.
+	if r := runWith(shengine.Options{}, hostDir(), `cd res://addons && pwd`); r.out != "host:res://addons\n" || r.code != 0 {
+		t.Errorf("host cd/pwd: got %+v", r)
+	}
+	if e := shengine.New(shengine.Options{}); e.Reserved("cd") || e.Reserved("pwd") || !e.Reserved("read") {
+		t.Errorf("Reserved without files: cd %v pwd %v read %v", e.Reserved("cd"), e.Reserved("pwd"), e.Reserved("read"))
+	}
+	// With file access, bash's own cd/pwd win.
+	root := t.TempDir()
+	os.Mkdir(filepath.Join(root, "sub"), 0o755)
+	opts := shengine.Options{Root: root}
+	if r := runWith(opts, hostDir(), `cd sub && pwd`); r.out != "/sub\n" || r.code != 0 {
+		t.Errorf("bash cd/pwd with files: got %+v", r)
+	}
+	if e := shengine.New(opts); !e.Reserved("cd") || !e.Reserved("pwd") {
+		t.Errorf("Reserved with files: cd and pwd should be reserved")
+	}
+	// No host cd/pwd: bash's as before.
+	if r := runWith(shengine.Options{}, []engine.Command{upper}, `cd / && pwd`); r.out != "/\n" || r.code != 0 {
+		t.Errorf("bash cd/pwd without host: got %+v", r)
+	}
+}
+
 func TestShellFeatures(t *testing.T) {
 	script := `
 f() { echo "fn:$1"; }

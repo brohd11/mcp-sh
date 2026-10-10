@@ -291,7 +291,8 @@ The **shell** is fixed by mcp-sh, whatever the app's config:
   and the like fail with 127. The interpreter's OS exec handler is never called.
 - **No files by default.** Redirects, `source`, globbing, `cd`, `test -f` and builtin file
   operands are confined to `root` (via `os.Root`) or to `/dev/null`. Process substitution
-  is rejected.
+  is rejected. Without `root`, `cd` and `pwd` go to the host's commands of those names if
+  it has them, so a host keeps its own working directory (Godot's `res://`).
 - **Clean environment.** jq's `$ENV` is empty.
 - **Bounded.** Timeout (exit 124), output caps, stdin caps.
 

@@ -8,6 +8,8 @@
 //     open/stat/readdir/access handlers. With no Root they only see /dev/null (and globs
 //     match nothing, staying literal); with a
 //     Root they are confined to that directory via os.Root (symlink escapes included).
+//     With no Root, `cd` and `pwd` go to the registry's commands of those names when it
+//     has them: a host with its own working directory (Godot's res://) keeps it there.
 //   - Process substitution is rejected before running, since it creates FIFOs on disk.
 //   - Environment starts empty apart from Options.Env; nothing leaks from the server.
 //   - Time is bounded by the caller's context.
@@ -22,6 +24,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -35,14 +38,20 @@ import (
 // ErrFileAccessDisabled is returned for any file operation when Options.Root is empty.
 var ErrFileAccessDisabled = errors.New("file access is disabled in this shell")
 
-// helpAlias is what the bash `help` builtin is renamed to when the registry has its own
-// `help`, so agents get our command list instead of bash's builtin help.
-const helpAlias = "\x00help"
+// routePrefix renames a bash builtin so the call reaches the registry command of the same
+// name instead. `help` always goes to the registry when it has one, so agents get our
+// command list instead of bash's builtin help. With file access disabled, bash's `cd` and
+// `pwd` have no directories to work with, so they go to a host that has its own (Godot's
+// res:// working directory, say).
+const routePrefix = "\x00"
 
-// pwdAlias is what the bash `pwd` builtin is renamed to. The builtin prints $PWD, which on
-// Windows holds the interpreter's backslash form ("\sub"), and `pwd -P` would resolve
-// symlinks on the real filesystem. The replacement prints the virtual directory.
-const pwdAlias = "\x00pwd"
+// routedWithoutFiles are the builtins routed to the registry when file access is disabled.
+var routedWithoutFiles = []string{"cd", "pwd"}
+
+// pwdAlias is what the bash `pwd` builtin is renamed to otherwise. The builtin prints $PWD,
+// which on Windows holds the interpreter's backslash form ("\sub"), and `pwd -P` would
+// resolve symlinks on the real filesystem. The replacement prints the virtual directory.
+const pwdAlias = "\x00virtual-pwd"
 
 type Options struct {
 	// Root is a host directory exposed to scripts as "/". Empty disables file access.
@@ -88,9 +97,13 @@ func Parse(script string) (*syntax.File, error) {
 }
 
 // Reserved reports whether name is a bash keyword or interpreter builtin, which a
-// registry command cannot override. `help` is exempt: it is routed to the registry.
+// registry command cannot override. `help` is exempt, and so are `cd` and `pwd` with file
+// access disabled: they are routed to the registry.
 func (e *Engine) Reserved(name string) bool {
-	return name != "help" && (interp.IsBuiltin(name) || syntax.IsKeyword(name))
+	if name == "help" || e.opts.Root == "" && slices.Contains(routedWithoutFiles, name) {
+		return false
+	}
+	return interp.IsBuiltin(name) || syntax.IsKeyword(name)
 }
 
 func (e *Engine) Run(ctx context.Context, script string, cmds engine.Registry, stdio engine.IO) (int, error) {
@@ -108,7 +121,7 @@ func (e *Engine) Run(ctx context.Context, script string, cmds engine.Registry, s
 	runner, err := interp.New(
 		interp.Env(expand.ListEnviron(e.opts.Env...)),
 		interp.StdIO(stdio.Stdin, stdio.Stdout, stdio.Stderr),
-		interp.CallHandler(callHandler(cmds)),
+		interp.CallHandler(callHandler(cmds, sb.root != nil)),
 		interp.ExecHandlers(execMiddleware(cmds, sb)),
 		interp.OpenHandler(sb.open),
 		interp.StatHandler(sb.stat),
@@ -138,12 +151,22 @@ func (e *Engine) Run(ctx context.Context, script string, cmds engine.Registry, s
 	return 1, err
 }
 
-func callHandler(cmds engine.Registry) interp.CallHandlerFunc {
-	_, hasHelp := cmds.Lookup("help")
+func callHandler(cmds engine.Registry, fileAccess bool) interp.CallHandlerFunc {
+	routed := map[string]bool{}
+	if _, ok := cmds.Lookup("help"); ok {
+		routed["help"] = true
+	}
+	if !fileAccess {
+		for _, name := range routedWithoutFiles {
+			if _, ok := cmds.Lookup(name); ok {
+				routed[name] = true
+			}
+		}
+	}
 	return func(ctx context.Context, args []string) ([]string, error) {
 		switch {
-		case hasHelp && args[0] == "help":
-			args[0] = helpAlias
+		case routed[args[0]]:
+			args[0] = routePrefix + args[0]
 		case args[0] == "pwd":
 			args[0] = pwdAlias
 		}
@@ -160,9 +183,7 @@ func execMiddleware(cmds engine.Registry, sb *sandbox) func(interp.ExecHandlerFu
 			if name == pwdAlias {
 				return pwd(hc, args[1:])
 			}
-			if name == helpAlias {
-				name = "help"
-			}
+			name = strings.TrimPrefix(name, routePrefix)
 			cmd, ok := cmds.Lookup(name)
 			if !ok {
 				fmt.Fprintf(hc.Stderr, "%s: command not found (run 'help' to list commands)\n", name)
