@@ -269,44 +269,42 @@ func readFile(t *testing.T, p string) string {
 }
 
 func TestSetup(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake claude is a shell script")
-	}
 	e := newEnv(t)
 	e.builtin(blenderLike)
-	dir := t.TempDir()
-	record := filepath.Join(dir, "args.txt")
-	fake := filepath.Join(dir, "claude")
-	os.WriteFile(fake, []byte("#!/bin/sh\necho \"$@\" > "+record+"\necho registered\n"), 0o755)
-	e.cfg.Claude = fake
+	e.cfg.Registrations = []Registration{{Suffix: "-game", Env: map[string]string{"PORT_X": "9"}, Label: "game"}}
 
 	out, errOut, code := e.run("", "setup")
 	if code != 0 {
 		t.Fatalf("setup: %q %q", out, errOut)
 	}
-	args := strings.TrimSpace(readFile(t, record))
-	if !strings.HasPrefix(args, "mcp add -s user test-shell -- /") || strings.Contains(args, "--profile") {
-		t.Fatalf("claude args: %q", args)
-	}
 	if c := readFile(t, profile.UserConfigPath(e.cfg.App, e.opts)); !strings.Contains(c, "test-shell config show") {
 		t.Fatalf("user config comment: %q", c)
 	}
-	for _, s := range []string{"Created " + profile.UserConfigPath(e.cfg.App, e.opts), "registered", "In the app:\n  1. Install uv", "test-shell commands"} {
+	for _, s := range []string{
+		"Created " + profile.UserConfigPath(e.cfg.App, e.opts),
+		"Register the server with:\n  Claude Code:\n    claude mcp add -s user test-shell -- /",
+		"  Codex:\n    codex mcp add test-shell -- /",
+		"claude mcp add -s user test-shell-game -e PORT_X=9 -- ",
+		"codex mcp add test-shell-game --env PORT_X=9 -- ",
+		"  # game\n",
+		"In the app:\n  1. Install uv",
+		"test-shell commands",
+	} {
 		if !strings.Contains(out, s) {
 			t.Errorf("setup output: missing %q in\n%s", s, out)
 		}
 	}
-	// Second run keeps the config, and --print only prints.
-	os.Remove(record)
-	out, _, _ = e.run("", "setup", "--print", "--scope", "project", "--name", "blender")
-	if !strings.Contains(out, "Using existing") || !strings.Contains(out, "mcp add -s project blender -- ") {
-		t.Fatalf("--print: %q", out)
+	// Second run keeps the config; --scope is Claude's, --name names every entry.
+	out, _, _ = e.run("", "setup", "--scope", "project", "--name", "blender")
+	for _, s := range []string{"Using existing", "claude mcp add -s project blender -- ", "codex mcp add blender -- ", "codex mcp add blender-game --env"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("setup --scope/--name: missing %q in\n%s", s, out)
+		}
 	}
-	if _, err := os.Stat(record); err == nil {
-		t.Fatal("--print ran claude")
-	}
-	if _, errOut, code := e.run("", "setup", "blender"); code != 2 || !strings.Contains(errOut, "unexpected argument") {
-		t.Fatalf("positional: %q", errOut)
+	for _, args := range [][]string{{"setup", "blender"}, {"setup", "--print"}} {
+		if _, errOut, code := e.run("", args...); code != 2 || !strings.Contains(errOut, "unexpected argument") {
+			t.Fatalf("%v: %d %q", args, code, errOut)
+		}
 	}
 }
 
@@ -318,6 +316,9 @@ func TestCLIErrors(t *testing.T) {
 	e.builtin(`{"host": {"address": "127.0.0.1:1"}}`)
 	if out, _, _ := e.run("", "--version"); out != "v1.2.3\n" {
 		t.Fatalf("version: %q", out)
+	}
+	if out, _, _ := e.run("", "--help"); !strings.Contains(out, "Register the server with:\n  Claude Code:\n    claude mcp add -s user test-shell -- ") || !strings.Contains(out, "codex mcp add test-shell -- ") {
+		t.Fatalf("help registration: %q", out)
 	}
 	if out, _, _ := e.run("", "--help"); !strings.Contains(out, "test-shell setup [--scope") || strings.Contains(out, "profile") || strings.Contains(out, "update [--check]") {
 		t.Fatalf("help: %q", out)

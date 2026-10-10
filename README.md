@@ -77,15 +77,17 @@ them, so they build against the local core.
 Every binary has the same CLI:
 
 ```sh
-mcp-sh-blender setup              # user config + `claude mcp add -s user mcp-sh-blender -- <path>`
+mcp-sh-blender setup              # user config + prints the claude/codex mcp add commands
 mcp-sh-blender commands           # check what the shell can reach
 mcp-sh-blender run SCRIPT         # one run, "-" reads the script from stdin
 mcp-sh-blender                    # the MCP server over stdio
 ```
 
-`setup` creates `~/.mcp-sh/blender/` (config overrides and `commands/`),
-registers the server with Claude Code (`--scope`, `--name`, or `--print` to only print the
-command), and lists what the app itself needs. Each app is its own MCP server
+`setup` creates `~/.mcp-sh/blender/` (config overrides and `commands/`), prints the
+commands that register the server with Claude Code and Codex (`--scope` for Claude,
+`--name`), and lists what the app itself needs. It registers nothing itself, and `--help`
+ends with the same commands. An app can add entries of its own (`Config.Registrations`),
+such as the same binary on another port. Each app is its own MCP server
 registration, so each one can be turned on and off independently.
 
 An app starts its **own** copy of each upstream server, so it coexists with the same

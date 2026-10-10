@@ -10,7 +10,8 @@
 //		mcpsh.Main(mcpsh.Config{Name: "mcp-sh-blender", App: "blender", FS: appFS})
 //	}
 //
-// `<binary> setup` registers it with Claude Code and prints what the app needs.
+// `<binary> setup` prints the commands that register it with Claude Code or Codex, and what
+// the app needs.
 package mcpsh
 
 import (
@@ -20,7 +21,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -70,8 +70,16 @@ type Config struct {
 	Subcommands []Subcommand
 	// Options overrides where config files are looked up (tests).
 	Options profile.Options
-	// Claude is the client CLI used by `setup` (default "claude"; tests use a fake).
-	Claude string
+	// Registrations are extra MCP server entries `setup` and --help print, such as the same
+	// binary pointed at another port.
+	Registrations []Registration
+}
+
+// Registration is an extra MCP server entry for the same binary.
+type Registration struct {
+	Suffix string            // appended to the server name: "-game" -> mcp-sh-godot-game
+	Env    map[string]string // environment for that entry
+	Label  string            // shown as a trailing comment, e.g. "running game"
 }
 
 // Main runs the CLI and exits.
@@ -144,7 +152,7 @@ func (c *cli) helpText() string {
 	n, app := c.cfg.Name, c.cfg.App
 	usage := [][2]string{
 		{"", "Start the MCP server over stdio"},
-		{"setup [--scope user|project|local] [--name NAME] [--print]", "Create the user config and register with Claude Code"},
+		{"setup [--scope user|project|local] [--name NAME]", "Create the user config and print how to register the server"},
 		{"run SCRIPT", `Run a script once ("-" reads it from stdin)`},
 		{"commands", "List the commands and their sources"},
 		{"commands add|remove DIR [--project]", "Add or remove a folder of your own script commands"},
@@ -184,6 +192,7 @@ Config:
   project   %[2]s  (+ .mcp-sh/%[3]s/commands/)
 Environment: MCP_SH_CONFIG_DIR, MCP_SH_TIMEOUT (seconds)
 `, profile.UserConfigPath(app, c.cfg.Options), filepath.Join(".mcp-sh", app+".json"), app)
+	b.WriteString("\n" + c.registerText("user", n))
 	return b.String()
 }
 
@@ -402,11 +411,9 @@ func (c *cli) commandDirs(l *profile.Loaded, args []string) int {
 }
 
 func (c *cli) setup(l *profile.Loaded, args []string) int {
-	scope, regName, printOnly := "user", "", false
+	scope, regName := "user", ""
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
-		case a == "--print":
-			printOnly = true
 		case a == "--scope" || a == "--name":
 			if i+1 >= len(args) {
 				c.eprintf("%s needs a value\n", a)
@@ -419,7 +426,7 @@ func (c *cli) setup(l *profile.Loaded, args []string) int {
 			}
 			i++
 		default:
-			c.eprintf("unexpected argument %q\nusage: %s setup [--scope user|project|local] [--name NAME] [--print]\n", a, c.cfg.Name)
+			c.eprintf("unexpected argument %q\nusage: %s setup [--scope user|project|local] [--name NAME]\n", a, c.cfg.Name)
 			return 2
 		}
 	}
@@ -441,42 +448,70 @@ func (c *cli) setup(l *profile.Loaded, args []string) int {
 	} else {
 		c.printf("Using existing %s.\n", path)
 	}
-
-	exe, err := os.Executable()
-	if err == nil {
-		exe, _ = filepath.EvalSymlinks(exe)
-	}
-	if err != nil || exe == "" {
-		exe = c.cfg.Name
-	}
-	claude := c.cfg.Claude
-	if claude == "" {
-		claude = "claude"
-	}
-	register := []string{claude, "mcp", "add", "-s", scope, regName, "--", exe}
-	_, lookErr := exec.LookPath(claude)
-	switch {
-	case printOnly || lookErr != nil:
-		if lookErr != nil && !printOnly {
-			c.printf("\n%s was not found on PATH; register the server yourself:\n", claude)
-		} else {
-			c.printf("\nRegister the server with:\n")
-		}
-		c.printf("  %s\n", shellquote.JoinMinimal(register))
-	default:
-		c.printf("\nRegistering: %s\n", shellquote.JoinMinimal(register))
-		cmd := exec.Command(register[0], register[1:]...)
-		cmd.Stdout, cmd.Stderr = c.stdout, c.stderr
-		if err := cmd.Run(); err != nil {
-			c.eprintf("Registration failed (%v). If %q already exists, remove it first:\n  %s mcp remove -s %s %s\n", err, regName, claude, scope, regName)
-			return 1
-		}
-	}
+	c.printf("\n%s", c.registerText(scope, regName))
 	if setup := strings.TrimSpace(l.Profile.Setup); setup != "" {
 		c.printf("\nIn the app:\n%s\n", indent(setup, "  "))
 	}
 	c.printf("\nCheck it with:\n  %s commands\n", c.cfg.Name)
 	return 0
+}
+
+// agents are the MCP clients whose registration commands `setup` and --help print. env is
+// sorted "KEY=VALUE" pairs. Only Claude Code has a scope.
+var agents = []struct {
+	title string
+	args  func(scope, name, exe string, env []string) []string
+}{
+	{"Claude Code", func(scope, name, exe string, env []string) []string {
+		args := []string{"claude", "mcp", "add", "-s", scope, name}
+		for _, e := range env {
+			args = append(args, "-e", e)
+		}
+		return append(args, "--", exe)
+	}},
+	{"Codex", func(scope, name, exe string, env []string) []string {
+		args := []string{"codex", "mcp", "add", name}
+		for _, e := range env {
+			args = append(args, "--env", e)
+		}
+		return append(args, "--", exe)
+	}},
+}
+
+// registerText is the "Register the server with:" block: for each agent, the command for
+// this binary as `name`, then one per Registration. Nothing is run.
+func (c *cli) registerText(scope, name string) string {
+	exe := exePath(c.cfg.Name)
+	var b strings.Builder
+	b.WriteString("Register the server with:\n")
+	for _, a := range agents {
+		fmt.Fprintf(&b, "  %s:\n    %s\n", a.title, shellquote.JoinMinimal(a.args(scope, name, exe, nil)))
+		for _, r := range c.cfg.Registrations {
+			env := make([]string, 0, len(r.Env))
+			for k, v := range r.Env {
+				env = append(env, k+"="+v)
+			}
+			sort.Strings(env)
+			line := shellquote.JoinMinimal(a.args(scope, name+r.Suffix, exe, env))
+			if r.Label != "" {
+				line += "  # " + r.Label
+			}
+			fmt.Fprintf(&b, "    %s\n", line)
+		}
+	}
+	return b.String()
+}
+
+// exePath is this binary's resolved path, or fallback when it can't be found.
+func exePath(fallback string) string {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		return fallback
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return exe
 }
 
 func indent(s, prefix string) string {
