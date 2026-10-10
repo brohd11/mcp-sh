@@ -282,8 +282,8 @@ func TestSetup(t *testing.T) {
 	}
 	for _, s := range []string{
 		"Created " + profile.UserConfigPath(e.cfg.App, e.opts),
-		"Register the server with:\n  Claude Code:\n    claude mcp add -s user test-shell -- /",
-		"  Codex:\n    codex mcp add test-shell -- /",
+		"Register the server with:\n  Claude Code:\n    claude mcp add -s user test-shell -- ",
+		"  Codex:\n    codex mcp add test-shell -- ",
 		"claude mcp add -s user test-shell-game -e PORT_X=9 -- ",
 		"codex mcp add test-shell-game --env PORT_X=9 -- ",
 		"  # game\n",
