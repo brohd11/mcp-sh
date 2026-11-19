@@ -53,7 +53,7 @@ func New(sh *shell.Shell, opts Options) *mcp.Server {
 			"Commands are the host's commands plus in-process builtins (grep, head, tail, wc, sort, uniq, cut, tr, sed s///, jq, seq, cat); "+
 			"no external programs or network. Shell file access (redirects, globs, builtin file operands): %s; "+
 			"host commands act with the host's own permissions. "+
-			"Call list_commands first to discover the host's commands. "+
+			"Find commands with `help | grep <topic>` (list_commands prints the full list). "+
 			"Example: `help` or `<command> --help | head -20`.", opts.Title, opts.FileAccess),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in runInput) (*mcp.CallToolResult, any, error) {
 		timeout := time.Duration(in.TimeoutSeconds) * time.Second

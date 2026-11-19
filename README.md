@@ -114,7 +114,7 @@ The format is `.mcp.json`'s `mcpServers` plus mcp-sh keys:
   "title": "the running Blender session",
   "instructions": "Guidance for the agent...",
   "setup": "What the app needs, printed by `setup`",
-  "host": { "address": "127.0.0.1:${EDITOR_CONSOLE_PORT:-9510}", "token": "${EDITOR_CONSOLE_TOKEN}", "hint": "..." },
+  "host": { "address": "127.0.0.1:${EDITOR_CONSOLE_PORT:-9510}", "token": "${EDITOR_CONSOLE_TOKEN}", "hint": "...", "timeout": 0 },
   "mcpServers": {
     "blender-mcp": {
       "command": "uvx", "args": ["blender-mcp"], "env": {},
@@ -148,6 +148,8 @@ The format is `.mcp.json`'s `mcpServers` plus mcp-sh keys:
 - `errorPattern` turns "error as plain text" results into exit 1.
 - `exec` runs script commands through the server's code tool (see [Script commands](#script-commands)).
 - `root` exposes one directory to the shell as `/`. Empty means no file access.
+- `host.timeout` (seconds) limits each host command on its own. The default 0 leaves only the
+  script's `timeout`, since some host commands (exports, scans) legitimately take a while.
 - Unknown keys are errors, which catches typos.
 
 Managing servers (writes the user config, or the project config with `--project`):
@@ -257,7 +259,7 @@ one JSON line back.
 ```json
 → {"id":1,"method":"hello","token":"...","protocol":1}
 ← {"id":1,"name":"godot","version":"4.7","commands":[{"name":"tree","summary":"..."}]}
-→ {"id":2,"method":"invoke","token":"...","cmd":"tree","args":["nodes","--recursive"],"stdin":"/root\n","cwd":"/"}
+→ {"id":2,"method":"invoke","token":"...","cmd":"tree","args":["nodes","--recursive"],"stdin":"/root\n","cwd":"/","timeout_ms":119000,"max_output":4194304}
 ← {"id":2,"stdout":"...","stderr":"","exit_code":0}
 → {"id":3,"method":"help","token":"...","cmd":"tree"}      (optional)
 ← {"id":3,"stdout":"usage: ..."}
@@ -268,6 +270,11 @@ one JSON line back.
 - Integers may arrive as floats (as Godot's JSON produces them).
 - Help is never fetched by running `cmd --help`, because a command that ignored the flag would really run.
 - Invokes to one host are serialized.
+- `timeout_ms` (time left before mcp-sh stops waiting; absent when there is no deadline) and
+  `max_output` (bytes) are advisory. When mcp-sh gives up it closes the connection. A host
+  that checks these, or watches for the close, can stop the command itself. One that doesn't
+  keeps working, and requests queued behind it wait. The Godot bridge passes all three to gdsh,
+  whose long commands check them.
 
 `hosttest/` is a complete host in about 100 lines. The Godot implementation is
 mcp-sh-godot's `addon/mcp_sh_godot/bridge.gd`.

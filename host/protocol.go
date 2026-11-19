@@ -10,7 +10,7 @@
 //	→ {"id":1,"method":"hello","token":"..."}
 //	← {"id":1,"name":"godot","version":"4.5","commands":[{"name":"scene","summary":"...","help":"..."}]}
 //
-//	→ {"id":2,"method":"invoke","token":"...","cmd":"scene","args":["tree"],"stdin":"","cwd":"/"}
+//	→ {"id":2,"method":"invoke","token":"...","cmd":"scene","args":["tree"],"stdin":"","cwd":"/","timeout_ms":119000,"max_output":4194304}
 //	← {"id":2,"stdout":"...","stderr":"...","exit_code":0}
 //
 //	→ {"id":3,"method":"help","token":"...","cmd":"scene"}            (optional)
@@ -19,6 +19,11 @@
 // Any response may instead be {"id":N,"error":"message"} (bad token, unknown method,
 // unknown command). Numbers may arrive as floats (Godot's JSON parser makes every
 // number a float), so integer fields are decoded leniently.
+//
+// timeout_ms (time left before mcp-sh gives up) and max_output (bytes) are optional and
+// advisory: a host that supports them stops the command itself, cooperatively, and answers
+// with what it has. When mcp-sh gives up it closes the connection, which a host can also watch
+// for. A host that ignores them keeps working after mcp-sh has stopped waiting.
 //
 // `help` is only asked for commands whose hello entry has no help text, so a host can
 // keep hello small and serve full help lazily. A host without it just answers with an
@@ -49,6 +54,9 @@ type Request struct {
 	Args     []string `json:"args,omitempty"`
 	Stdin    string   `json:"stdin,omitempty"`
 	Cwd      string   `json:"cwd,omitempty"`
+	// Invoke only: time left before mcp-sh stops waiting, and the output it will keep.
+	TimeoutMs int64 `json:"timeout_ms,omitempty"`
+	MaxOutput int64 `json:"max_output,omitempty"`
 }
 
 // CommandInfo describes one host command, as sent in the hello response.

@@ -64,6 +64,9 @@ type Host struct {
 	Token    string `json:"token,omitempty"`
 	Hint     string `json:"hint,omitempty"` // shown when the host is unreachable
 	Disabled bool   `json:"disabled,omitempty"`
+	// Timeout limits each host command, in seconds; 0 leaves only the script timeout. Off by
+	// default: some commands (exports, scans) legitimately take long.
+	Timeout int `json:"timeout,omitempty"`
 	// Exec runs script commands through a host command that executes code from its
 	// stdin, like mcp-sh-gimp's bridge `python`.
 	Exec *HostExec `json:"exec,omitempty"`

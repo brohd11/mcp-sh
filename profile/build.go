@@ -2,6 +2,7 @@ package profile
 
 import (
 	"regexp"
+	"time"
 
 	"github.com/brohd11/mcp-sh/host"
 	"github.com/brohd11/mcp-sh/host/mcphost"
@@ -15,7 +16,7 @@ func (l *Loaded) Sources(version string) ([]host.Source, error) {
 	var sources []host.Source
 	var bindings []scripts.Binding
 	if h := p.Host; h != nil && !h.Disabled && h.Address != "" {
-		client := &host.Client{Addr: h.Address, Token: h.Token, Hint: h.Hint}
+		client := &host.Client{Addr: h.Address, Token: h.Token, Hint: h.Hint, Timeout: time.Duration(h.Timeout) * time.Second}
 		sources = append(sources, client)
 		if h.Exec != nil {
 			bindings = append(bindings, scripts.Binding{Host: client, Tool: h.Exec.Command, Lang: h.Exec.Lang})

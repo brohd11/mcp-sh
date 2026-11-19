@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -15,6 +17,13 @@ import (
 
 // DefaultMaxStdin caps how much piped input is forwarded to one host invoke.
 const DefaultMaxStdin = 16 << 20
+
+// DefaultMaxOutput is the output a host is asked to stop at (max_output) for one invoke.
+const DefaultMaxOutput = 4 << 20
+
+// maxResponse caps how much of one response line is read: JSON escaping can grow the
+// output several times, and a host that ignores max_output mustn't exhaust memory.
+const maxResponse = 64 << 20
 
 // Client talks to one host. Calls are serialized: hosts like Godot handle requests on a
 // single thread, and the shell runs pipeline stages concurrently.
@@ -27,6 +36,10 @@ type Client struct {
 	DialTimeout time.Duration
 	// MaxStdin caps forwarded stdin per invoke (default DefaultMaxStdin).
 	MaxStdin int64
+	// Timeout limits each host command; 0 leaves only the script's own timeout.
+	Timeout time.Duration
+	// MaxOutput is sent as max_output (default DefaultMaxOutput).
+	MaxOutput int64
 
 	mu     sync.Mutex
 	nextID int64
@@ -67,11 +80,36 @@ func (c *Client) Hello(ctx context.Context) (HelloResult, error) {
 }
 
 func (c *Client) Invoke(ctx context.Context, cmd string, args []string, stdin, cwd string) (InvokeResult, error) {
-	resp, err := c.roundTrip(ctx, Request{Method: MethodInvoke, Cmd: cmd, Args: args, Stdin: stdin, Cwd: cwd})
+	script := ctx
+	if c.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.Timeout)
+		defer cancel()
+	}
+	req := Request{Method: MethodInvoke, Cmd: cmd, Args: args, Stdin: stdin, Cwd: cwd, MaxOutput: c.MaxOutput}
+	if req.MaxOutput <= 0 {
+		req.MaxOutput = DefaultMaxOutput
+	}
+	// Tell the host how long it has, so it can stop on its own; at least 1 ms, since 0 means none.
+	if deadline, ok := ctx.Deadline(); ok {
+		req.TimeoutMs = max(time.Until(deadline).Milliseconds(), 1)
+	}
+	resp, err := c.roundTrip(ctx, req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return InvokeResult{}, c.timeoutErr(script)
+		}
 		return InvokeResult{}, err
 	}
 	return resp.InvokeResult, nil
+}
+
+// timeoutErr names the limit that ran out: the script's, or else the per-command Timeout.
+func (c *Client) timeoutErr(script context.Context) error {
+	if script.Err() == nil && c.Timeout > 0 {
+		return fmt.Errorf("timed out after %s (host command limit)", c.Timeout)
+	}
+	return fmt.Errorf("timed out (script time limit reached)")
 }
 
 // Help asks the host for one command's full help.
@@ -158,9 +196,12 @@ func (c *Client) roundTrip(ctx context.Context, req Request) (Response, error) {
 	if _, err := conn.Write(append(payload, '\n')); err != nil {
 		return Response{}, c.ioErr(ctx, "write to host", err)
 	}
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	line, err := bufio.NewReader(io.LimitReader(conn, maxResponse)).ReadBytes('\n')
 	if err != nil && len(line) == 0 {
 		return Response{}, c.ioErr(ctx, "read from host", err)
+	}
+	if err != nil && len(line) >= maxResponse {
+		return Response{}, fmt.Errorf("host response exceeds %d MB", maxResponse>>20)
 	}
 	var resp Response
 	if err := json.Unmarshal(line, &resp); err != nil {
