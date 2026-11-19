@@ -244,6 +244,7 @@ Keep your own commands wherever suits you, such as a git repo, and point the app
 ```sh
 mcp-sh-roblox commands add ~/code/roblox-tools             # user config
 mcp-sh-roblox commands add ./tools/roblox --project        # this project's config
+mcp-sh-roblox commands add ./tools/private --local         # private, gitignored
 mcp-sh-roblox commands remove ~/code/roblox-tools
 ```
 

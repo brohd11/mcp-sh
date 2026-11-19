@@ -155,7 +155,7 @@ func (c *cli) helpText() string {
 		{"setup [--scope user|project|local] [--name NAME]", "Create the user config and print how to register the server"},
 		{"run SCRIPT", `Run a script once ("-" reads it from stdin)`},
 		{"commands", "List the commands and their sources"},
-		{"commands add|remove DIR [--project]", "Add or remove a folder of your own script commands"},
+		{"commands add|remove DIR [--user|--project|--local]", "Add or remove a folder of your own script commands"},
 		{"mcp list|add|remove|import ...", "Manage the upstream MCP servers"},
 		{"config path|show", "Show config files, or the merged config"},
 	}
@@ -355,11 +355,11 @@ func (c *cli) commands(l *profile.Loaded, args []string) int {
 	return 0
 }
 
-// commandDirs edits the commandDirs list of the user config (or the project config with
-// --project): `commands add DIR` and `commands remove DIR`.
+// commandDirs edits the commandDirs list of the user config (or the project or local config
+// with --project / --local): `commands add DIR` and `commands remove DIR`.
 func (c *cli) commandDirs(l *profile.Loaded, args []string) int {
 	usage := func() int {
-		c.eprintf("usage: %s commands add|remove DIR [--project]\n", c.cfg.Name)
+		c.eprintf("usage: %s commands add|remove DIR [--user|--project|--local]\n", c.cfg.Name)
 		return 2
 	}
 	sub, args := args[0], args[1:]
@@ -367,8 +367,12 @@ func (c *cli) commandDirs(l *profile.Loaded, args []string) int {
 	var dir string
 	for _, a := range args {
 		switch {
+		case a == "--user":
+			target = profile.UserConfigPath(l.Name, c.cfg.Options)
 		case a == "--project":
 			target = profile.ProjectConfigPath(l.Name, c.cfg.Options)
+		case a == "--local":
+			target = profile.LocalConfigPath(l.Name, c.cfg.Options)
 		case strings.HasPrefix(a, "-") || dir != "":
 			c.eprintf("unexpected argument %q\n", a)
 			return usage()

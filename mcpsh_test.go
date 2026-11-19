@@ -452,6 +452,21 @@ func TestCommandDirsCLI(t *testing.T) {
 	if _, errOut, code := e.run("", "commands", "remove", tools); code != 1 || !strings.Contains(errOut, "no commandDirs") {
 		t.Fatalf("remove twice: %q", errOut)
 	}
+	// --local writes the private layer, which keeps itself out of git.
+	local := profile.LocalConfigPath("test", e.opts)
+	if _, errOut, code := e.run("", "commands", "add", tools, "--local"); code != 0 || !strings.Contains(readFile(t, local), tools) {
+		t.Fatalf("add --local: %q %d", errOut, code)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(local), ".gitignore")); err != nil {
+		t.Errorf("local .gitignore: %v", err)
+	}
+	if out, _, _ := e.run("", "commands"); !strings.Contains(out, "  mine     from my repo") {
+		t.Errorf("local commandDirs not scanned:\n%s", out)
+	}
+	if _, errOut, code := e.run("", "commands", "remove", tools, "--local"); code != 0 || strings.Contains(readFile(t, local), tools) {
+		t.Fatalf("remove --local: %q %d", errOut, code)
+	}
+
 	if _, errOut, code := e.run("", "commands", "frob", tools); code != 2 || !strings.Contains(errOut, "usage") {
 		t.Fatalf("bad subcommand: %q", errOut)
 	}
