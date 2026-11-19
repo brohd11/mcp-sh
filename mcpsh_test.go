@@ -260,6 +260,48 @@ func TestMCPManagement(t *testing.T) {
 	}
 }
 
+// import writes to the layer matching the server's Claude Code scope; remove finds the layer.
+func TestMCPImportScope(t *testing.T) {
+	e := newEnv(t)
+	e.builtin(blenderLike)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	project := e.opts.ProjectDir
+	os.WriteFile(filepath.Join(project, ".mcp.json"), []byte(`{"mcpServers": {"shared": {"command": "shared-mcp"}}}`), 0o644)
+	os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{
+		"mcpServers": {"everywhere": {"command": "user-mcp"}},
+		"projects": {"`+filepath.ToSlash(project)+`": {"mcpServers": {"private": {"command": "local-mcp", "env": {"TOKEN": "x"}}}}}}`), 0o644)
+	user, proj, local := profile.UserConfigPath(e.cfg.App, e.opts), profile.ProjectConfigPath(e.cfg.App, e.opts), profile.LocalConfigPath(e.cfg.App, e.opts)
+
+	for _, c := range []struct{ name, path, layer string }{{"private", local, "local"}, {"shared", proj, "project"}, {"everywhere", user, "user"}} {
+		out, errOut, code := e.run("", "mcp", "import", c.name)
+		if code != 0 || !strings.Contains(out, "("+c.layer+")") || !profile.HasServer(c.path, c.name) {
+			t.Fatalf("import %s: %q %q %d", c.name, out, errOut, code)
+		}
+	}
+	if ignore := readFile(t, filepath.Join(filepath.Dir(local), ".gitignore")); !strings.Contains(ignore, "\n*\n") {
+		t.Errorf("local .gitignore: %q", ignore)
+	}
+	if _, errOut, code := e.run("", "mcp", "import", "private", "--user"); code != 0 || !profile.HasServer(user, "private") {
+		t.Fatalf("import --user: %q", errOut)
+	}
+	// Now in two layers: remove asks which.
+	if _, errOut, code := e.run("", "mcp", "remove", "private"); code != 2 || !strings.Contains(errOut, "--local or --user") {
+		t.Fatalf("ambiguous remove: %q %d", errOut, code)
+	}
+	if _, errOut, code := e.run("", "mcp", "remove", "private", "--local"); code != 0 || profile.HasServer(local, "private") || !profile.HasServer(user, "private") {
+		t.Fatalf("remove --local: %q", errOut)
+	}
+	if _, errOut, code := e.run("", "mcp", "remove", "shared"); code != 0 || profile.HasServer(proj, "shared") {
+		t.Fatalf("remove finds the project layer: %q", errOut)
+	}
+	out, _, _ := e.run("", "config", "path")
+	if !strings.Contains(out, local) {
+		t.Errorf("config path should list the local layer:\n%s", out)
+	}
+}
+
 func readFile(t *testing.T, p string) string {
 	b, err := os.ReadFile(p)
 	if err != nil {

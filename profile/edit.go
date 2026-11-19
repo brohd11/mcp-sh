@@ -37,7 +37,22 @@ func writeRaw(path string, raw map[string]json.RawMessage) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	if err := ensureLocalGitignore(filepath.Dir(path)); err != nil {
+		return err
+	}
 	return os.WriteFile(path, append(data, '\n'), 0o644)
+}
+
+// ensureLocalGitignore keeps .mcp-sh/local/ out of git: it may hold tokens (env, headers).
+func ensureLocalGitignore(dir string) error {
+	if filepath.Base(dir) != localDir || filepath.Base(filepath.Dir(dir)) != ".mcp-sh" {
+		return nil
+	}
+	ignore := filepath.Join(dir, ".gitignore")
+	if _, err := os.Stat(ignore); err == nil {
+		return nil
+	}
+	return os.WriteFile(ignore, []byte("# Private per-project mcp-sh config: never commit it.\n*\n"), 0o644)
 }
 
 func editServers(path string, edit func(servers map[string]json.RawMessage) error) error {
@@ -79,6 +94,20 @@ func AddServer(path, name string, s *Server) error {
 		servers[name] = b
 		return nil
 	})
+}
+
+// HasServer reports whether the config file at path defines an mcpServers entry by name.
+func HasServer(path, name string) bool {
+	raw, err := readRaw(path)
+	if err != nil {
+		return false
+	}
+	var servers map[string]json.RawMessage
+	if json.Unmarshal(raw["mcpServers"], &servers) != nil {
+		return false
+	}
+	_, ok := servers[name]
+	return ok
 }
 
 // RemoveServer deletes an mcpServers entry from the file at path. Removing a server that
@@ -162,7 +191,10 @@ func EnsureUserConfig(app, binary string, o Options) (path string, created bool,
 
 // ImportSource is a config file that may define MCP servers to import.
 type ImportSource struct {
-	Label   string
+	Label string
+	// Scope is the mcp-sh layer matching the source's Claude Code scope: "project"
+	// (.mcp.json, shared), "user" (~/.claude.json) or "local" (that project in ~/.claude.json).
+	Scope   string
 	Servers map[string]*Server
 }
 
@@ -171,15 +203,15 @@ type ImportSource struct {
 func ImportSources(projectDir, home string) []ImportSource {
 	var out []ImportSource
 	if s := readServers(filepath.Join(projectDir, ".mcp.json"), nil); len(s) > 0 {
-		out = append(out, ImportSource{Label: filepath.Join(projectDir, ".mcp.json"), Servers: s})
+		out = append(out, ImportSource{Label: filepath.Join(projectDir, ".mcp.json"), Scope: "project", Servers: s})
 	}
 	claude := filepath.Join(home, ".claude.json")
 	if s := readServers(claude, nil); len(s) > 0 {
-		out = append(out, ImportSource{Label: claude + " (user)", Servers: s})
+		out = append(out, ImportSource{Label: claude + " (user)", Scope: "user", Servers: s})
 	}
 	if key := projectKey(claude, projectDir); key != "" {
 		if s := readServers(claude, []string{"projects", key}); len(s) > 0 {
-			out = append(out, ImportSource{Label: claude + " (project " + projectDir + ")", Servers: s})
+			out = append(out, ImportSource{Label: claude + " (project " + projectDir + ")", Scope: "local", Servers: s})
 		}
 	}
 	return out
@@ -239,11 +271,12 @@ func readServers(path string, keys []string) map[string]*Server {
 	return out
 }
 
-// FindImport looks up a server by name across sources, in order.
-func FindImport(sources []ImportSource, name string) (*Server, string, error) {
+// FindImport looks up a server by name across sources, in order, and returns the source
+// it came from (its Label and Scope).
+func FindImport(sources []ImportSource, name string) (*Server, ImportSource, error) {
 	for _, src := range sources {
 		if s, ok := src.Servers[name]; ok {
-			return s, src.Label, nil
+			return s, src, nil
 		}
 	}
 	var all []string
@@ -254,7 +287,7 @@ func FindImport(sources []ImportSource, name string) (*Server, string, error) {
 	}
 	sort.Strings(all)
 	if len(all) == 0 {
-		return nil, "", fmt.Errorf("no MCP servers found in .mcp.json or ~/.claude.json")
+		return nil, ImportSource{}, fmt.Errorf("no MCP servers found in .mcp.json or ~/.claude.json")
 	}
-	return nil, "", fmt.Errorf("no server named %q (found: %v)", name, all)
+	return nil, ImportSource{}, fmt.Errorf("no server named %q (found: %v)", name, all)
 }

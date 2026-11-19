@@ -252,12 +252,15 @@ func TestImport(t *testing.T) {
 	if len(sources) != 3 {
 		t.Fatalf("sources: %+v", sources)
 	}
-	s, label, err := profile.FindImport(sources, "blender")
-	if err != nil || s.Command != "uvx" || s.Args[0] != "blender-mcp" || !strings.Contains(label, "(user)") {
-		t.Fatalf("blender: %+v %q %v", s, label, err)
+	s, from, err := profile.FindImport(sources, "blender")
+	if err != nil || s.Command != "uvx" || s.Args[0] != "blender-mcp" || !strings.Contains(from.Label, "(user)") || from.Scope != "user" {
+		t.Fatalf("blender: %+v %+v %v", s, from, err)
 	}
-	if s, _, err := profile.FindImport(sources, "local-srv"); err != nil || s.URL != "http://x/mcp" || s.Headers["A"] != "b" {
-		t.Fatalf("local: %+v %v", s, err)
+	if s, from, err := profile.FindImport(sources, "local-srv"); err != nil || s.URL != "http://x/mcp" || s.Headers["A"] != "b" || from.Scope != "local" {
+		t.Fatalf("local: %+v %+v %v", s, from, err)
+	}
+	if _, from, _ := profile.FindImport(sources, "proj-srv"); from.Scope != "project" {
+		t.Fatalf("project scope: %+v", from)
 	}
 	if _, _, err := profile.FindImport(sources, "nope"); err == nil || !strings.Contains(err.Error(), "found: [blender local-srv proj-srv]") {
 		t.Fatalf("missing: %v", err)
@@ -403,5 +406,38 @@ func TestHostExec(t *testing.T) {
 	}
 	if b := src.Bindings[0]; b.Host != client || b.Tool != "python" || b.Lang != "python" || b.Server != nil {
 		t.Fatalf("binding: %+v", b)
+	}
+}
+
+
+// The local layer (.mcp-sh/local/) overrides the project, and writing it adds a .gitignore.
+func TestLocalLayer(t *testing.T) {
+	o := opts(t)
+	write(t, profile.ProjectConfigPath("blender", o), `{"title": "project"}`)
+	local := profile.LocalConfigPath("blender", o)
+	if err := profile.AddServer(local, "secret", &profile.Server{Type: "http", URL: "http://x/mcp", Headers: map[string]string{"Authorization": "t"}}); err != nil {
+		t.Fatal(err)
+	}
+	ignore, err := os.ReadFile(filepath.Join(filepath.Dir(local), ".gitignore"))
+	if err != nil || !strings.Contains(string(ignore), "\n*\n") {
+		t.Fatalf(".gitignore: %q %v", ignore, err)
+	}
+	write(t, local, `{"title": "local", "mcpServers": {"secret": {"type": "http", "url": "http://x/mcp"}}}`)
+	l, err := profile.Load(blender, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Profile.Title != "local" || l.Profile.MCPServers["secret"] == nil {
+		t.Errorf("local layer: title %q servers %v", l.Profile.Title, l.Profile.ServerNames())
+	}
+	if last := l.Layers[len(l.Layers)-1]; last.Kind != "local" || !last.Exists {
+		t.Errorf("last layer: %+v", last)
+	}
+	if !profile.HasServer(local, "secret") || profile.HasServer(local, "nope") {
+		t.Error("HasServer")
+	}
+	// Writing the project config leaves .mcp-sh/ itself without a .gitignore.
+	if _, err := os.Stat(filepath.Join(filepath.Dir(profile.ProjectConfigPath("blender", o)), ".gitignore")); err == nil {
+		t.Error("project folder got a .gitignore")
 	}
 }

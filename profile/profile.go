@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -112,7 +113,7 @@ type Exec struct {
 
 // Layer is one config file that may contribute to a profile.
 type Layer struct {
-	Kind        string // "built-in", "user", "project"
+	Kind        string // "built-in", "user", "project", "local"
 	Path        string // file path ("built-in:config.json" for embedded)
 	Exists      bool
 	CommandsDir string // folder of script commands for this layer
@@ -179,6 +180,14 @@ func ProjectConfigPath(name string, o Options) string {
 	return filepath.Join(o.projectDir(), ".mcp-sh", name+".json")
 }
 
+// LocalConfigPath is an app's private per-project config: like the project config, but in
+// .mcp-sh/local/, which gets a .gitignore of "*" when created, so tokens stay out of git.
+func LocalConfigPath(name string, o Options) string {
+	return filepath.Join(o.projectDir(), ".mcp-sh", localDir, name+".json")
+}
+
+const localDir = "local"
+
 // Layers lists the files an app's config is built from, in precedence order.
 func Layers(app App, o Options) []Layer {
 	builtin := false
@@ -188,11 +197,18 @@ func Layers(app App, o Options) []Layer {
 	}
 	user := UserConfigPath(app.Name, o)
 	project := ProjectConfigPath(app.Name, o)
+	local := LocalConfigPath(app.Name, o)
 	return []Layer{
 		{Kind: "built-in", Path: "built-in:config.json", Exists: builtin, CommandsDir: "built-in:commands"},
 		{Kind: "user", Path: user, Exists: fileExists(user), CommandsDir: filepath.Join(filepath.Dir(user), "commands")},
 		{Kind: "project", Path: project, Exists: fileExists(project), CommandsDir: filepath.Join(filepath.Dir(project), app.Name, "commands")},
+		{Kind: "local", Path: local, Exists: fileExists(local), CommandsDir: filepath.Join(filepath.Dir(local), app.Name, "commands")},
 	}
+}
+
+func dirExists(p string) bool {
+	info, err := os.Stat(p)
+	return err == nil && info.IsDir()
 }
 
 func fileExists(p string) bool {
@@ -206,7 +222,7 @@ func Load(app App, o Options) (*Loaded, error) {
 		return nil, fmt.Errorf("invalid app name %q", app.Name)
 	}
 	layers := Layers(app, o)
-	if !layers[0].Exists && !layers[1].Exists && !layers[2].Exists {
+	if !slices.ContainsFunc(layers, func(l Layer) bool { return l.Exists }) {
 		return nil, fmt.Errorf("no config for %s: expected %s", app.Name, layers[1].Path)
 	}
 	l := &Loaded{Name: app.Name, Layers: layers, ImageDir: filepath.Join(o.configDir(), app.Name, "images")}
@@ -244,7 +260,7 @@ func Load(app App, o Options) (*Loaded, error) {
 		return nil, fmt.Errorf("%s config: %w", app.Name, err)
 	}
 	// Command folders, later ones winning: built-in, user commands/ then the user's
-	// commandDirs, project commands/ then the project's commandDirs. Missing default
+	// commandDirs, project then local the same way. Missing default
 	// folders are skipped at scan time; missing commandDirs are reported.
 	if app.FS != nil {
 		if sub, err := fs.Sub(app.FS, "commands"); err == nil {
@@ -263,6 +279,10 @@ func Load(app App, o Options) (*Loaded, error) {
 		l.CommandDirs = append(l.CommandDirs, scripts.Dir{Label: dir, FS: os.DirFS(dir), Required: required})
 	}
 	for _, layer := range layers[1:] {
+		// The local layer is optional and private: list it only once it is in use.
+		if layer.Kind == "local" && !layer.Exists && !dirExists(layer.CommandsDir) {
+			continue
+		}
 		add(layer.CommandsDir, false)
 		for _, d := range layer.ExtraCommandDirs {
 			add(d, true)

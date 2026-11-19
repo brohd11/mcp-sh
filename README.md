@@ -104,6 +104,11 @@ layers winning:
 | built-in | embedded `config.json` | embedded `commands/` |
 | user | `~/.mcp-sh/<app>/config.json` | `~/.mcp-sh/<app>/commands/` |
 | project | `./.mcp-sh/<app>.json` | `./.mcp-sh/<app>/commands/` |
+| local | `./.mcp-sh/local/<app>.json` | `./.mcp-sh/local/<app>/commands/` |
+
+The local layer is private to you and this project. When mcp-sh writes it, it adds a
+`.gitignore` of `*` to `.mcp-sh/local/`, so servers with tokens in `env` or `headers` stay out of
+git. Its commands folder is only listed once the layer is in use.
 
 `MCP_SH_CONFIG_DIR` moves the user folder (default `~/.mcp-sh`).
 
@@ -152,15 +157,20 @@ The format is `.mcp.json`'s `mcpServers` plus mcp-sh keys:
   script's `timeout`, since some host commands (exports, scans) legitimately take a while.
 - Unknown keys are errors, which catches typos.
 
-Managing servers (writes the user config, or the project config with `--project`):
+Managing servers (writes the user config unless `--user`, `--project` or `--local` picks a
+layer):
 
 ```sh
 mcp-sh-godot mcp add godot-mcp -- npx -y some-godot-mcp
 mcp-sh-godot mcp add remote --url http://localhost:8000/mcp --header "Authorization: Bearer x"
 mcp-sh-blender mcp import blender     # copy an entry from .mcp.json / ~/.claude.json
-mcp-sh-blender mcp list | remove NAME
+mcp-sh-blender mcp list | remove NAME # remove finds the layer; asks when it's in several
 mcp-sh-blender config path | show
 ```
+
+`import` keeps the server's Claude Code scope: a `.mcp.json` server goes to the project
+config, a user server (`~/.claude.json`) to the user config, and a local one (that project's
+entry in `~/.claude.json`) to the local config. A layer flag overrides this.
 
 ## Upstream MCP servers as commands
 
@@ -244,6 +254,7 @@ ones winning when two scripts share a name:
 1. the built-in `commands/`
 2. `~/.mcp-sh/<app>/commands/`, then the user config's `commandDirs`
 3. `./.mcp-sh/<app>/commands/`, then the project config's `commandDirs`
+4. `./.mcp-sh/local/<app>/commands/`, then the local config's `commandDirs`
 
 A script that replaces one from an earlier folder still works, but its listing says so:
 `query  my query (overrides the one in built-in roblox commands)`. A `commandDirs` folder
@@ -317,7 +328,7 @@ not make a powerful app safe. Use `hideTools` to drop tools you don't want reach
 | Path | What |
 |---|---|
 | `mcpsh.go` | CLI every app binary shares: serve, run, commands, setup, mcp, config, update |
-| `profile/` | config schema, layering (app-embedded, user, project), editing, import |
+| `profile/` | config schema, layering (app-embedded, user, project, local), editing, import |
 | `host/` | `Source` interface; native host protocol + TCP client |
 | `host/mcphost` | upstream MCP server as a namespaced command (go-sdk client) |
 | `host/scripts` | script commands through a server's code tool |
@@ -329,6 +340,9 @@ not make a powerful app safe. Use `hideTools` to drop tools you don't want reach
 
 ## Known limitations
 
+- No `PIPESTATUS`: the embedded interpreter (mvdan/sh) doesn't implement it. A pipeline's
+  status is its last command's; `set -o pipefail` makes a failure anywhere count, e.g.
+  `set -o pipefail; godot add_node ... | head -1 || echo failed`.
 - A pure-shell loop piped into `head` runs until it ends or times out, because the
   interpreter has no SIGPIPE. Go builtins and command output stop on EPIPE.
 - Builtins cover the common flags only, and fail loudly on others. `sed` only supports `s///`.

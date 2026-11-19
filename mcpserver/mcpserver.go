@@ -54,6 +54,7 @@ func New(sh *shell.Shell, opts Options) *mcp.Server {
 			"no external programs or network. Shell file access (redirects, globs, builtin file operands): %s; "+
 			"host commands act with the host's own permissions. "+
 			"Find commands with `help | grep <topic>` (list_commands prints the full list). "+
+			"A pipeline's status is its last command's; `set -o pipefail` makes a failure anywhere count (no PIPESTATUS). "+
 			"Example: `help` or `<command> --help | head -20`.", opts.Title, opts.FileAccess),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in runInput) (*mcp.CallToolResult, any, error) {
 		timeout := time.Duration(in.TimeoutSeconds) * time.Second

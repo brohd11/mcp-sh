@@ -524,7 +524,7 @@ func indent(s, prefix string) string {
 
 func (c *cli) mcp(l *profile.Loaded, args []string) int {
 	if len(args) == 0 {
-		c.eprintf("usage: %s mcp list | add NAME [--url URL | -- COMMAND ARGS...] | remove NAME | import NAME [--as NAME]\n", c.cfg.Name)
+		c.eprintf("usage: %s mcp list | add NAME [--url URL | -- COMMAND ARGS...] | remove NAME | import NAME [--as NAME]  [--user|--project|--local]\n", c.cfg.Name)
 		return 2
 	}
 	sub, args := args[0], args[1:]
@@ -558,8 +558,14 @@ func (c *cli) mcp(l *profile.Loaded, args []string) int {
 		return 0
 	}
 
-	// Edits go to the user config, or the project config with --project.
-	target := profile.UserConfigPath(l.Name, c.cfg.Options)
+	// Edits go to the user config unless a flag picks a layer. import follows the source's
+	// scope, and remove finds the layer that defines the server.
+	layerPaths := map[string]string{
+		"user":    profile.UserConfigPath(l.Name, c.cfg.Options),
+		"project": profile.ProjectConfigPath(l.Name, c.cfg.Options),
+		"local":   profile.LocalConfigPath(l.Name, c.cfg.Options),
+	}
+	layer := ""
 	var name, url, typ, as string
 	var command []string
 	env, headers := map[string]string{}, map[string]string{}
@@ -575,8 +581,8 @@ func (c *cli) mcp(l *profile.Loaded, args []string) int {
 		}
 		var ok = true
 		switch a {
-		case "--project":
-			target = profile.ProjectConfigPath(l.Name, c.cfg.Options)
+		case "--user", "--project", "--local":
+			layer = strings.TrimPrefix(a, "--")
 		case "--url":
 			url, ok = value()
 		case "--type":
@@ -620,6 +626,10 @@ func (c *cli) mcp(l *profile.Loaded, args []string) int {
 		return 2
 	}
 
+	target := layerPaths[layer]
+	if layer == "" {
+		target = layerPaths["user"]
+	}
 	switch sub {
 	case "add":
 		s := &profile.Server{Type: typ, URL: url}
@@ -645,6 +655,21 @@ func (c *cli) mcp(l *profile.Loaded, args []string) int {
 		}
 		c.printf("Added %s to %s\n", name, target)
 	case "remove":
+		if layer == "" {
+			var found []string
+			for _, k := range []string{"local", "project", "user"} {
+				if profile.HasServer(layerPaths[k], name) {
+					found = append(found, k)
+				}
+			}
+			if len(found) > 1 {
+				c.eprintf("%s is in the %s configs; pick one with --%s\n", name, strings.Join(found, " and "), strings.Join(found, " or --"))
+				return 2
+			}
+			if len(found) == 1 {
+				target = layerPaths[found[0]]
+			}
+		}
 		if err := profile.RemoveServer(target, name); err != nil {
 			c.eprintf("%v\n", err)
 			if _, inConfig := l.Raw.MCPServers[name]; inConfig {
@@ -667,11 +692,15 @@ func (c *cli) mcp(l *profile.Loaded, args []string) int {
 		if as == "" {
 			as = name
 		}
+		if layer == "" {
+			layer = from.Scope
+		}
+		target = layerPaths[layer]
 		if err := profile.AddServer(target, as, s); err != nil {
 			c.eprintf("%v\n", err)
 			return 1
 		}
-		c.printf("Imported %s from %s into %s as %s\n", name, from, target, as)
+		c.printf("Imported %s from %s into %s (%s) as %s\n", name, from.Label, target, layer, as)
 	default:
 		c.eprintf("unknown mcp command %q (list, add, remove, import)\n", sub)
 		return 2
