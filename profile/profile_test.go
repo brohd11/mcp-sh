@@ -409,7 +409,6 @@ func TestHostExec(t *testing.T) {
 	}
 }
 
-
 // The local layer (.mcp-sh/local/) overrides the project, and writing it adds a .gitignore.
 func TestLocalLayer(t *testing.T) {
 	o := opts(t)
