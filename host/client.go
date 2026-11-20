@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -96,7 +97,8 @@ func (c *Client) Invoke(ctx context.Context, cmd string, args []string, stdin, c
 	}
 	resp, err := c.roundTrip(ctx, req)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
+		// The connection's deadline can fire just before the context's: same limit.
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
 			return InvokeResult{}, c.timeoutErr(script)
 		}
 		return InvokeResult{}, err
