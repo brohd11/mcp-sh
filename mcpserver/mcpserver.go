@@ -32,6 +32,10 @@ type runInput struct {
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"optional timeout for this call, in seconds"`
 }
 
+type listInput struct {
+	Filter string `json:"filter,omitempty" jsonschema:"optional search text: list only the commands whose name or one-line summary contains every word of it, ignoring case"`
+}
+
 type helpInput struct {
 	Command string `json:"command" jsonschema:"command name, as listed by list_commands"`
 }
@@ -53,7 +57,7 @@ func New(sh *shell.Shell, opts Options) *mcp.Server {
 			"Commands are the host's commands plus in-process builtins (grep, head, tail, wc, sort, uniq, cut, tr, sed s///, jq, seq, cat); "+
 			"no external programs or network. Shell file access (redirects, globs, builtin file operands): %s; "+
 			"host commands act with the host's own permissions. "+
-			"Find commands with `help | grep <topic>` (list_commands prints the full list). "+
+			"Find commands with `help -s <topic>` (list_commands lists them all, or takes a filter). "+
 			"A pipeline's status is its last command's; `set -o pipefail` makes a failure anywhere count (no PIPESTATUS). "+
 			"Example: `help` or `<command> --help | head -20`.", opts.Title, opts.FileAccess),
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in runInput) (*mcp.CallToolResult, any, error) {
@@ -66,14 +70,33 @@ func New(sh *shell.Shell, opts Options) *mcp.Server {
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_commands",
-		Description: fmt.Sprintf("List every command available in the %s shell (host commands and builtins) with a one-line summary.", opts.Title),
-	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		Name: "list_commands",
+		Description: fmt.Sprintf("List the commands available in the shell connected to %s (host commands and builtins) with a one-line summary. "+
+			"Pass filter to search names and summaries; prefer it on hosts with many commands. "+
+			"Without a filter, a list of more than %d commands shows names only.", opts.Title, builtins.ListCap),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in listInput) (*mcp.CallToolResult, any, error) {
 		reg, statuses, err := sh.Commands(ctx)
 		if err != nil {
 			return textResult(err.Error(), true), nil, nil
 		}
-		return textResult(shell.FormatSources(statuses)+"\n"+builtins.FormatList(reg), false), nil, nil
+		if strings.TrimSpace(in.Filter) == "" {
+			return textResult(shell.FormatSources(statuses)+"\n"+builtins.FormatList(reg), false), nil, nil
+		}
+		// A search keeps only the sources that failed: a missing source explains missing matches.
+		var failed []shell.SourceStatus
+		for _, st := range statuses {
+			if st.Err != nil {
+				failed = append(failed, st)
+			}
+		}
+		list := builtins.SearchList(reg, in.Filter)
+		if list == "" {
+			list = fmt.Sprintf("no commands match %q; try a shorter term, or call list_commands without a filter\n", in.Filter)
+		}
+		if header := shell.FormatSources(failed); header != "" {
+			list = header + "\n" + list
+		}
+		return textResult(list, false), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -101,7 +124,8 @@ func instructions(opts Options) string {
 		"(grep, head, jq, ...) instead of making many separate calls. " +
 		"Only listed commands exist; there are no external programs. " +
 		"Shell file access (redirects, globs, builtin file operands): " + opts.FileAccess + ". " +
-		"Host commands act with the host's own permissions.")
+		"Host commands act with the host's own permissions. " +
+		"list_commands takes an optional filter that searches command names and summaries; on a large host, prefer it to the full list.")
 	if opts.Instructions != "" {
 		b.WriteString("\n\n")
 		b.WriteString(opts.Instructions)

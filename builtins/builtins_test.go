@@ -3,6 +3,7 @@ package builtins_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,5 +193,57 @@ func TestHelpList(t *testing.T) {
 	}
 	if !strings.Contains(list, "  host ") {
 		t.Fatalf("no host builtin:\n%s", list)
+	}
+}
+
+func TestHelpSearch(t *testing.T) {
+	reg := builtins.Registry([]engine.Command{
+		{Name: "scene", Summary: "inspect the Scene tree", Source: "host"},
+		{Name: "tween", Summary: "animate a property", Source: "host"},
+	}, nil)
+	list := builtins.SearchList(reg, "SCENE")
+	if list != "Host commands:\n  scene  inspect the Scene tree\n" {
+		t.Fatalf("name match:\n%s", list)
+	}
+	if list := builtins.SearchList(reg, "property animate"); list != "Host commands:\n  tween  animate a property\n" {
+		t.Fatalf("summary words in any order:\n%s", list)
+	}
+	if list := builtins.SearchList(reg, "lines"); strings.Contains(list, "Host commands") || !strings.Contains(list, "Builtins") {
+		t.Fatalf("empty groups should be skipped:\n%s", list)
+	}
+	if list := builtins.SearchList(reg, "nothing-like-this"); list != "" {
+		t.Fatalf("no match: %q", list)
+	}
+}
+
+func TestHelpListCap(t *testing.T) {
+	var cmds []engine.Command
+	for i := range builtins.ListCap + 50 {
+		cmds = append(cmds, engine.Command{Name: fmt.Sprintf("cmd%03d", i), Summary: "a long summary that should not appear", Source: "host"})
+	}
+	list := builtins.FormatList(builtins.Registry(cmds, nil))
+	if strings.Contains(list, "a long summary") {
+		t.Fatalf("capped list printed summaries")
+	}
+	if !strings.Contains(list, fmt.Sprintf("Host commands (%d):\n  cmd000 cmd001 ", builtins.ListCap+50)) ||
+		!strings.Contains(list, "help -s TERM") {
+		t.Fatalf("capped list:\n%s", list)
+	}
+	for _, line := range strings.Split(list, "\n") {
+		if strings.HasPrefix(line, "  cmd") && len(line) > 100 {
+			t.Fatalf("line too long (%d): %q", len(line), line)
+		}
+	}
+}
+
+func TestHelpSearchCommand(t *testing.T) {
+	if out, _, code := sh(t, "", "help -s FILTER json"); code != 0 || !strings.Contains(out, "  jq ") || strings.Contains(out, "grep") {
+		t.Fatalf("help -s: exit %d\n%s", code, out)
+	}
+	if out, errOut, code := sh(t, "", "help --search zzz"); code != 1 || out != "" || !strings.Contains(errOut, "no commands match") {
+		t.Fatalf("help --search no match: exit %d %q %q", code, out, errOut)
+	}
+	if _, _, code := sh(t, "", "help -s"); code != 2 {
+		t.Fatalf("help -s without term: exit %d", code)
 	}
 }

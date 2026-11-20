@@ -2,6 +2,7 @@ package mcpserver_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -46,7 +47,10 @@ func call(t *testing.T, s *mcp.ClientSession, name string, args map[string]any) 
 func TestTools(t *testing.T) {
 	h := &hosttest.Host{
 		Name: "testhost", Version: "1.2",
-		Commands: []host.CommandInfo{{Name: "greet", Summary: "say hello", Help: "usage: greet NAME"}},
+		Commands: []host.CommandInfo{
+			{Name: "greet", Summary: "say hello", Help: "usage: greet NAME"},
+			{Name: "scene", Summary: "inspect the scene tree"},
+		},
 		Handlers: map[string]hosttest.Handler{
 			"greet": func(req host.Request) host.InvokeResult {
 				return host.InvokeResult{Stdout: "hello " + strings.Join(req.Args, " ")}
@@ -83,6 +87,23 @@ func TestTools(t *testing.T) {
 	}
 	if text, _ := call(t, s, "list_commands", nil); !strings.HasPrefix(text, "Sources:\n  testhost 1.2 (127.0.0.1:") || !strings.Contains(text, "Host commands:\n  greet  say hello") {
 		t.Errorf("list_commands: %q", text)
+	}
+	if text, isErr := call(t, s, "list_commands", map[string]any{"filter": "HELLO"}); text != "Host commands:\n  greet  say hello\n" || isErr {
+		t.Errorf("list_commands filter: %q isError=%v", text, isErr)
+	}
+	if text, isErr := call(t, s, "list_commands", map[string]any{"filter": "zzz"}); !strings.HasPrefix(text, `no commands match "zzz"`) || isErr {
+		t.Errorf("list_commands no match: %q isError=%v", text, isErr)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name == "list_commands" {
+			schema, _ := json.Marshal(tool.InputSchema)
+			if !strings.Contains(string(schema), `"filter"`) {
+				t.Errorf("list_commands schema has no filter: %s", schema)
+			}
+			if strings.Contains(tool.Description, "the the ") {
+				t.Errorf("list_commands description: %q", tool.Description)
+			}
+		}
 	}
 	if text, _ := call(t, s, "help", map[string]any{"command": "greet"}); text != "usage: greet NAME" {
 		t.Errorf("help: %q", text)
