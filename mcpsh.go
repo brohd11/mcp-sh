@@ -138,6 +138,8 @@ func run(cfg Config, args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		return c.withApp(func(l *profile.Loaded) int { return c.mcp(l, rest) })
 	case "config":
 		return c.withApp(func(l *profile.Loaded) int { return c.config(l, rest) })
+	case "file-access":
+		return c.withApp(func(l *profile.Loaded) int { return c.fileAccessCmd(l, rest) })
 	}
 	for _, s := range cfg.Subcommands {
 		if s.Name == sub && sub != "" {
@@ -158,6 +160,7 @@ func (c *cli) helpText() string {
 		{"commands add|remove DIR [--user|--project|--local]", "Add or remove a folder of your own script commands"},
 		{"mcp list|add|remove|import ...", "Manage the upstream MCP servers"},
 		{"config path|show", "Show config files, or the merged config"},
+		{"file-access [--enable|--disable] [--project|--local|--user]", "Let the shell read and write files in the project folder"},
 	}
 	for _, s := range c.cfg.Subcommands {
 		usage = append(usage, [2]string{s.Usage, s.Summary})
@@ -212,16 +215,11 @@ func (c *cli) newShell(l *profile.Loaded) (*shell.Shell, error) {
 	if err != nil {
 		return nil, err
 	}
-	root := p.Root
+	root := l.FileAccessRoot()
 	if root != "" {
-		abs, err := filepath.Abs(root)
-		if err != nil {
-			return nil, err
+		if info, err := os.Stat(root); err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("fileAccess: project folder %q is not a directory", root)
 		}
-		if info, err := os.Stat(abs); err != nil || !info.IsDir() {
-			return nil, fmt.Errorf("root: %q is not a directory", root)
-		}
-		root = abs
 	}
 	timeout := time.Duration(p.Timeout) * time.Second
 	if s := os.Getenv("MCP_SH_TIMEOUT"); s != "" {
@@ -234,8 +232,9 @@ func (c *cli) newShell(l *profile.Loaded) (*shell.Shell, error) {
 	return &shell.Shell{
 		Sources: sources,
 		Engine: shengine.New(shengine.Options{
-			Root: root,
-			Env:  []string{"HOME=/", "MCP_SH=" + c.cfg.Name, "MCP_SH_APP=" + l.Name},
+			Root:   root,
+			Hidden: hiddenNames,
+			Env:    []string{"HOME=/", "MCP_SH=" + c.cfg.Name, "MCP_SH_APP=" + l.Name},
 		}),
 		Extra:     c.cfg.Builtins,
 		Timeout:   timeout,
@@ -243,11 +242,93 @@ func (c *cli) newShell(l *profile.Loaded) (*shell.Shell, error) {
 	}, nil
 }
 
-func fileAccess(l *profile.Loaded) string {
-	if l.Profile.Root != "" {
-		return "read/write inside a sandbox directory, seen as /"
+// hiddenNames are the project entries the shell cannot see: its own config (an edit there
+// could add an MCP server, which runs a real process) and git (hooks run on git commands).
+var hiddenNames = []string{".mcp-sh", ".git"}
+
+func (c *cli) fileAccess(l *profile.Loaded) string {
+	if root := l.FileAccessRoot(); root != "" {
+		return fmt.Sprintf("read/write inside the project folder %s, seen as / (%s hidden)",
+			root, strings.Join(hiddenNames, " and "))
+	}
+	if l.Profile.FileAccessOn() {
+		return fmt.Sprintf("disabled: no project here (no %s in %s or its parents); pipe data between commands or use variables",
+			c.cfg.Options.ProjectMarkersText(), l.ProjectDir)
 	}
 	return "disabled (pipe data between commands or use variables)"
+}
+
+// fileAccessCmd shows or sets fileAccess: `file-access [--enable|--disable]`, in the project
+// config unless --local or --user picks another layer.
+func (c *cli) fileAccessCmd(l *profile.Loaded, args []string) int {
+	layerPaths := map[string]string{
+		"user":    profile.UserConfigPath(l.Name, c.cfg.Options),
+		"project": profile.ProjectConfigPath(l.Name, c.cfg.Options),
+		"local":   profile.LocalConfigPath(l.Name, c.cfg.Options),
+	}
+	layer, set := "project", ""
+	for _, a := range args {
+		switch a {
+		case "--enable", "--disable":
+			if set != "" {
+				c.eprintf("give only one of --enable and --disable\n")
+				return 2
+			}
+			set = a
+		case "--project", "--local", "--user":
+			layer = strings.TrimPrefix(a, "--")
+		default:
+			c.eprintf("unexpected argument %q\nusage: %s file-access [--enable|--disable] [--project|--local|--user]\n", a, c.cfg.Name)
+			return 2
+		}
+	}
+	if set == "" {
+		state := "off"
+		if l.Profile.FileAccessOn() {
+			state = "on"
+		}
+		from := "default"
+		for _, ly := range l.Layers {
+			if ly.Exists && ly.Kind != "built-in" && profile.HasFileAccess(ly.Path) {
+				from = ly.Path
+			}
+		}
+		c.printf("file access: %s (%s)\n", state, from)
+		if l.ProjectFound {
+			c.printf("project folder: %s\n", l.ProjectDir)
+		} else {
+			c.printf("project folder: none found (no %s in %s or its parents)\n", c.cfg.Options.ProjectMarkersText(), l.ProjectDir)
+			if state == "on" {
+				c.printf("The shell gets no files here: enable it with --project or --local to make this folder a project.\n")
+			}
+		}
+		return 0
+	}
+	target := layerPaths[layer]
+	on := set == "--enable"
+	if err := profile.SetFileAccess(target, on); err != nil {
+		c.eprintf("%v\n", err)
+		return 1
+	}
+	if !on {
+		c.printf("File access disabled in %s\n", target)
+		return 0
+	}
+	c.printf("File access enabled in %s\n", target)
+	if layer == "user" {
+		c.printf("It applies in every project folder (one holding a %s), never outside one.\n", c.cfg.Options.ProjectMarkersText())
+		if !l.ProjectFound {
+			c.printf("There is no project here, so the shell gets no files in %s.\n", l.ProjectDir)
+			return 0
+		}
+	}
+	// Otherwise writing the project or local config created .mcp-sh/ in ProjectDir if nothing
+	// marked a project yet, so it is one now.
+	c.printf("The shell can read and write %s (seen as /), except %s.\n", l.ProjectDir, strings.Join(hiddenNames, " and "))
+	if layer == "project" {
+		c.printf("This is the project config: commit it to share the setting, or use --local to keep it to yourself.\n")
+	}
+	return 0
 }
 
 // instructions adds the config's command groups to its own guidance, so the agent
@@ -290,7 +371,7 @@ func (c *cli) serve(l *profile.Loaded) int {
 	}
 	server := mcpserver.New(sh, mcpserver.Options{
 		Name: c.cfg.Name, Version: c.cfg.Version, Title: title,
-		Instructions: instructions(l), FileAccess: fileAccess(l),
+		Instructions: instructions(l), FileAccess: c.fileAccess(l),
 	})
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		c.eprintf("%v\n", err)
@@ -684,11 +765,7 @@ func (c *cli) mcp(l *profile.Loaded, args []string) int {
 		c.printf("Removed %s from %s\n", name, target)
 	case "import":
 		home, _ := os.UserHomeDir()
-		project := c.cfg.Options.ProjectDir
-		if project == "" {
-			project, _ = os.Getwd()
-		}
-		s, from, err := profile.FindImport(profile.ImportSources(project, home), name)
+		s, from, err := profile.FindImport(profile.ImportSources(l.ProjectDir, home), name)
 		if err != nil {
 			c.eprintf("%v\n", err)
 			return 1

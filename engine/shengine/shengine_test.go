@@ -218,35 +218,83 @@ func hostDir() []engine.Command {
 	}
 }
 
-func TestCdAndPwdGoToHostWithoutFiles(t *testing.T) {
-	runWith := func(opts shengine.Options, cmds []engine.Command, script string) result {
-		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		var out, errOut bytes.Buffer
-		code, err := shengine.New(opts).Run(ctx, script, builtins.Registry(cmds, nil), engine.IO{Stdout: &out, Stderr: &errOut})
-		return result{out.String(), errOut.String(), code, err}
-	}
+func runWith(t *testing.T, opts shengine.Options, cmds []engine.Command, script string) result {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var out, errOut bytes.Buffer
+	code, err := shengine.New(opts).Run(ctx, script, builtins.Registry(cmds, nil), engine.IO{Stdout: &out, Stderr: &errOut})
+	return result{out.String(), errOut.String(), code, err}
+}
+
+func TestCdAndPwdRouting(t *testing.T) {
 	// No file access and a host cd/pwd: both reach the host.
-	if r := runWith(shengine.Options{}, hostDir(), `cd res://addons && pwd`); r.out != "host:res://addons\n" || r.code != 0 {
+	if r := runWith(t, shengine.Options{}, hostDir(), `cd res://addons && pwd`); r.out != "host:res://addons\n" || r.code != 0 {
 		t.Errorf("host cd/pwd: got %+v", r)
 	}
-	if e := shengine.New(shengine.Options{}); e.Reserved("cd") || e.Reserved("pwd") || !e.Reserved("read") {
-		t.Errorf("Reserved without files: cd %v pwd %v read %v", e.Reserved("cd"), e.Reserved("pwd"), e.Reserved("read"))
-	}
-	// With file access, bash's own cd/pwd win.
+	// With file access too: the host keeps cd/pwd, and relative paths resolve against "/".
 	root := t.TempDir()
 	os.Mkdir(filepath.Join(root, "sub"), 0o755)
 	opts := shengine.Options{Root: root}
-	if r := runWith(opts, hostDir(), `cd sub && pwd`); r.out != "/sub\n" || r.code != 0 {
+	r := runWith(t, opts, hostDir(), `cd res://addons && pwd && echo hi > f && cat /f`)
+	if r.out != "host:res://addons\nhi\n" || r.code != 0 {
+		t.Errorf("host cd/pwd with files: got %+v", r)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "f")); string(b) != "hi\n" {
+		t.Errorf("redirect after host cd: root/f = %q", b)
+	}
+	for _, e := range []*shengine.Engine{shengine.New(shengine.Options{}), shengine.New(opts)} {
+		if e.Reserved("cd") || e.Reserved("pwd") || !e.Reserved("read") {
+			t.Errorf("Reserved: cd %v pwd %v read %v", e.Reserved("cd"), e.Reserved("pwd"), e.Reserved("read"))
+		}
+	}
+	// No host cd/pwd: bash's, with or without files.
+	if r := runWith(t, opts, []engine.Command{upper}, `cd sub && pwd`); r.out != "/sub\n" || r.code != 0 {
 		t.Errorf("bash cd/pwd with files: got %+v", r)
 	}
-	if e := shengine.New(opts); !e.Reserved("cd") || !e.Reserved("pwd") {
-		t.Errorf("Reserved with files: cd and pwd should be reserved")
-	}
-	// No host cd/pwd: bash's as before.
-	if r := runWith(shengine.Options{}, []engine.Command{upper}, `cd / && pwd`); r.out != "/\n" || r.code != 0 {
+	if r := runWith(t, shengine.Options{}, []engine.Command{upper}, `cd / && pwd`); r.out != "/\n" || r.code != 0 {
 		t.Errorf("bash cd/pwd without host: got %+v", r)
+	}
+}
+
+func TestHiddenEntries(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{".mcp-sh", ".git", "sub"} {
+		os.Mkdir(filepath.Join(root, d), 0o755)
+	}
+	os.WriteFile(filepath.Join(root, ".mcp-sh", "godot.json"), []byte("{}\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "keep.txt"), []byte("keep\n"), 0o644)
+	opts := shengine.Options{Root: root, Hidden: []string{".mcp-sh", ".git"}}
+
+	for _, script := range []string{
+		`echo x > .mcp-sh/a.json`,
+		`echo x > /sub/../.mcp-sh/a.json`,
+		`echo x >> .mcp-sh/godot.json`,
+		`cat .mcp-sh/godot.json`,
+		`cat < /.mcp-sh/godot.json`,
+		`cat .MCP-SH/godot.json`,
+		`cat .git/HEAD`,
+		`echo x > .git/hooks`,
+		`cd .mcp-sh`,
+		`[ -e .git ]`,
+		`[ -d /.mcp-sh ]`,
+	} {
+		if r := run(t, opts, script); r.code == 0 {
+			t.Errorf("%q reached a hidden folder: %+v", script, r)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".mcp-sh", "a.json")); err == nil {
+		t.Fatal("wrote into a hidden folder")
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, ".mcp-sh", "godot.json")); string(b) != "{}\n" {
+		t.Fatalf("hidden file changed: %q", b)
+	}
+	if r := run(t, opts, `echo * .*; cat keep.txt`); r.out != "keep.txt sub .*\nkeep\n" { // .* matches nothing, so stays literal
+		t.Fatalf("listing: got %+v", r)
+	}
+	// A hidden name below the top level is an ordinary name.
+	if r := run(t, opts, `echo x > sub/.git && cat sub/.git`); r.out != "x\n" {
+		t.Fatalf("nested name: got %+v", r)
 	}
 }
 

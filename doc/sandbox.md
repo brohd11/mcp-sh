@@ -7,9 +7,14 @@ The **shell** is fixed by mcp-sh, whatever the app's config:
 - **No processes.** Only registered commands run. Absolute paths, `exec`, `eval`, `PATH=`
   and the like fail with 127. The interpreter's OS exec handler is never called.
 - **No files by default.** Redirects, `source`, globbing, `cd`, `test -f` and builtin file
-  operands are confined to `root` (via `os.Root`) or to `/dev/null`. Process substitution
-  is rejected. Without `root`, `cd` and `pwd` go to the host's commands of those names if
-  it has them, so a host keeps its own working directory (Godot's `res://`).
+  operands only reach `/dev/null`. With `fileAccess` on (`<bin> file-access --enable`)
+  they are confined to the project folder, seen as `/` (via `os.Root`), and its `.mcp-sh/`
+  and `.git/` do not exist for the shell: an edit there could add an MCP server (a real
+  process) or a git hook. That check is by name: a symlink already in the project that
+  points into them is followed. Process substitution is rejected.
+- **The host keeps `cd`.** `cd` and `pwd` go to the host's commands of those names if it
+  has them, with or without file access, so a host keeps its own working directory
+  (Godot's `res://`) and relative shell paths resolve against `/`.
 - **Clean environment.** jq's `$ENV` is empty.
 - **Bounded.** Timeout (exit 124), output caps, stdin caps.
 

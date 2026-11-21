@@ -16,6 +16,11 @@ containing `*` to `.mcp-sh/local/`. Its commands folder is listed only when the 
 
 `MCP_SH_CONFIG_DIR` moves the user folder (default `~/.mcp-sh`).
 
+The project is found like git's repository: the nearest folder, from the working directory
+up, holding a `.mcp-sh/` folder or one of the app's project markers (mcp-sh-godot uses
+`project.godot`), so runs from deeper in the project use its config. The user folder
+(`~/.mcp-sh`) does not count. Without either, the working directory is the project.
+
 The format extends `.mcp.json`'s `mcpServers` with shell and host settings:
 
 ```json
@@ -36,13 +41,13 @@ The format extends `.mcp.json`'s `mcpServers` with shell and host settings:
     "remote": { "type": "http", "url": "http://localhost:8000/mcp", "headers": {} }
   },
   "commandDirs": ["~/code/my-commands"],
-  "root": "",
+  "fileAccess": false,
   "timeout": 120,
   "maxOutput": 65536
 }
 ```
 
-- `${VAR}` / `${VAR:-default}` expand in `host`, `mcpServers` and `root`, as in `.mcp.json`.
+- `${VAR}` / `${VAR:-default}` expand in `host` and `mcpServers`, as in `.mcp.json`.
   `config show` prints the merged config *unexpanded*, so tokens from the environment are not printed.
 - **Merging `mcpServers` by name:** setting any transport key (`type`, `command`, `args`, `env`,
   `url`, `headers`) replaces the transport as a unit. `exec`, `defaults`, `errorPattern`,
@@ -54,7 +59,14 @@ The format extends `.mcp.json`'s `mcpServers` with shell and host settings:
   result is ambiguous. Tool help marks parameters supplied by config.
 - `errorPattern` turns "error as plain text" results into exit 1.
 - `exec` runs script commands through the server's code tool (see [Script commands](script-commands.md)).
-- `root` exposes one directory to the shell as `/`. Empty means no file access.
+- `fileAccess: true` exposes the project folder to the shell as `/`, minus `.mcp-sh/` and
+  `.git/` (see [Sandbox](sandbox.md)). It is a flag, not a path, so it keeps working when the
+  project moves. Set it with `<bin> file-access --enable|--disable`, which writes the project
+  config unless `--local` or `--user` is given; with no flag it prints the current state.
+  It needs a project folder: one holding `.mcp-sh/` or an app marker. Apps without markers
+  (GIMP, Krita) use the nearest `.mcp-sh/`, so `file-access --enable` in a folder makes it
+  one. In the user config it turns access on in every project and never outside one: run
+  from a folder that is no project (your home folder, say), the shell gets no files.
 - `host.timeout` (seconds) limits each host command on its own. The default 0 leaves only the
   script's `timeout`, since some host commands (exports, scans) legitimately take a while.
 - Unknown keys are errors, which catches typos.

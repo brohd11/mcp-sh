@@ -172,6 +172,23 @@ func RemoveCommandDir(path, dir string) error {
 	})
 }
 
+// SetFileAccess writes fileAccess to the config file at path.
+func SetFileAccess(path string, on bool) error {
+	raw, err := readRaw(path)
+	if err != nil {
+		return err
+	}
+	raw["fileAccess"], _ = json.Marshal(on)
+	return writeRaw(path, raw)
+}
+
+// HasFileAccess reports whether the config file at path sets fileAccess.
+func HasFileAccess(path string) bool {
+	raw, err := readRaw(path)
+	_, ok := raw["fileAccess"]
+	return err == nil && ok
+}
+
 // EnsureUserConfig creates a minimal user config and commands folder for an app, so
 // users have an obvious place to override it. It never overwrites an existing file.
 // binary names the app's executable in the file's comment.

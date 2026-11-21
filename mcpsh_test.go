@@ -471,3 +471,111 @@ func TestCommandDirsCLI(t *testing.T) {
 		t.Fatalf("bad subcommand: %q", errOut)
 	}
 }
+
+func TestFileAccessCLI(t *testing.T) {
+	e := newEnv(t)
+	e.builtin(`{"title": "files", "host": {"address": "` + startHost(t) + `", "token": "tok"}}`)
+	project := e.opts.ProjectDir
+	// Run from deeper in the project, found by its marker.
+	e.cfg.Options.ProjectDir = ""
+	e.cfg.Options.ProjectMarkers = []string{"project.marker"}
+	os.WriteFile(filepath.Join(project, "project.marker"), nil, 0o644)
+	deep := filepath.Join(project, "scenes", "enemies")
+	os.MkdirAll(deep, 0o755)
+	t.Chdir(deep)
+
+	if out, _, code := e.run("", "file-access"); code != 0 || !strings.Contains(out, "file access: off (default)") || !strings.Contains(out, "project folder: "+project) {
+		t.Fatalf("status: %q", out)
+	}
+	if _, errOut, code := e.run("", "run", `echo hi > f`); code == 0 || !strings.Contains(errOut, "file access is disabled") {
+		t.Fatalf("redirect while off: %q %d", errOut, code)
+	}
+
+	out, errOut, code := e.run("", "file-access", "--enable")
+	cfg := filepath.Join(project, ".mcp-sh", "test.json")
+	if code != 0 || !strings.Contains(out, "File access enabled in "+cfg) || !strings.Contains(out, "commit it") {
+		t.Fatalf("enable: %q %q %d", out, errOut, code)
+	}
+	if !strings.Contains(readFile(t, cfg), `"fileAccess": true`) {
+		t.Fatalf("project config: %s", readFile(t, cfg))
+	}
+	if out, _, _ := e.run("", "file-access"); !strings.Contains(out, "file access: on ("+cfg+")") {
+		t.Fatalf("status after enable: %q", out)
+	}
+	if out, errOut, code := e.run("", "run", `echo hi > /f && cat f`); code != 0 || out != "hi\n" {
+		t.Fatalf("redirect while on: %q %q %d", out, errOut, code)
+	}
+	if readFile(t, filepath.Join(project, "f")) != "hi\n" {
+		t.Fatal("file not written at the project root")
+	}
+	if _, _, code := e.run("", "run", `cat /.mcp-sh/test.json`); code == 0 {
+		t.Fatal(".mcp-sh readable from the shell")
+	}
+
+	if out, _, code := e.run("", "file-access", "--disable"); code != 0 || !strings.Contains(out, "disabled") {
+		t.Fatalf("disable: %q", out)
+	}
+	if !strings.Contains(readFile(t, cfg), `"fileAccess": false`) {
+		t.Fatalf("project config after disable: %s", readFile(t, cfg))
+	}
+	if _, _, code := e.run("", "run", `cat /f`); code == 0 {
+		t.Fatal("file readable after disable")
+	}
+	if _, errOut, code := e.run("", "file-access", "--enable", "--disable"); code != 2 || !strings.Contains(errOut, "only one") {
+		t.Fatalf("both flags: %q", errOut)
+	}
+}
+
+func TestFileAccessLayers(t *testing.T) {
+	e := newEnv(t)
+	e.builtin(`{"title": "files", "host": {"address": "` + startHost(t) + `", "token": "tok"}}`)
+	local := profile.LocalConfigPath("test", e.opts)
+	user := profile.UserConfigPath("test", e.opts)
+
+	// --local writes the private layer, with its .gitignore.
+	if out, errOut, code := e.run("", "file-access", "--enable", "--local"); code != 0 || !strings.Contains(out, "File access enabled in "+local) || strings.Contains(out, "commit") {
+		t.Fatalf("--local: %q %q %d", out, errOut, code)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(local), ".gitignore")); err != nil {
+		t.Fatal("local layer has no .gitignore")
+	}
+	// A project false does not beat a local true.
+	if _, _, code := e.run("", "file-access", "--disable", "--project"); code != 0 {
+		t.Fatal("--project --disable failed")
+	}
+	if out, _, _ := e.run("", "file-access"); !strings.Contains(out, "file access: on ("+local+")") {
+		t.Fatalf("status with local on, project off: %q", out)
+	}
+	if out, _, code := e.run("", "run", `echo x > /f && cat < f`); code != 0 || out != "x\n" {
+		t.Fatalf("run with local on: %q %d", out, code)
+	}
+
+	// --user writes the user config and works inside a project...
+	os.Remove(local)
+	os.Remove(profile.ProjectConfigPath("test", e.opts))
+	out, _, code := e.run("", "file-access", "--enable", "--user")
+	if code != 0 || !strings.Contains(out, "File access enabled in "+user) || !strings.Contains(out, "never outside one") {
+		t.Fatalf("--user: %q", out)
+	}
+	if !strings.Contains(readFile(t, user), `"fileAccess": true`) {
+		t.Fatalf("user config: %s", readFile(t, user))
+	}
+	if out, _, code := e.run("", "run", `cat < /f`); code != 0 || out != "x\n" {
+		t.Fatalf("run in a project with user on: %q %d", out, code)
+	}
+
+	// ...but gives nothing outside one.
+	bare := t.TempDir()
+	t.Chdir(bare)
+	e.cfg.Options.ProjectDir = ""
+	out, _, _ = e.run("", "file-access")
+	if !strings.Contains(out, "file access: on ("+user+")") || !strings.Contains(out, "project folder: none found") || !strings.Contains(out, "gets no files here") {
+		t.Fatalf("status outside a project: %q", out)
+	}
+	if _, errOut, code := e.run("", "run", `echo x > f`); code == 0 || !strings.Contains(errOut, "file access is disabled") {
+		t.Fatalf("run outside a project: %q %d", errOut, code)
+	}
+	if _, err := os.Stat(filepath.Join(bare, "f")); err == nil {
+		t.Fatal("wrote outside a project")
+	}
+}

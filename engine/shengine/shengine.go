@@ -7,9 +7,11 @@
 //   - Files: redirects, `source`, globbing, `cd` and `test -f` all go through the
 //     open/stat/readdir/access handlers. With no Root they only see /dev/null (and globs
 //     match nothing, staying literal); with a
-//     Root they are confined to that directory via os.Root (symlink escapes included).
-//     With no Root, `cd` and `pwd` go to the registry's commands of those names when it
-//     has them: a host with its own working directory (Godot's res://) keeps it there.
+//     Root they are confined to that directory via os.Root (symlink escapes included),
+//     and the top-level names in Options.Hidden (.mcp-sh, .git) do not exist.
+//   - `cd` and `pwd` go to the registry's commands of those names when it has them: a
+//     host with its own working directory (Godot's res://) keeps it there, and the
+//     shell's own directory stays at "/".
 //   - Process substitution is rejected before running, since it creates FIFOs on disk.
 //   - Environment starts empty apart from Options.Env; nothing leaks from the server.
 //   - Time is bounded by the caller's context.
@@ -40,13 +42,13 @@ var ErrFileAccessDisabled = errors.New("file access is disabled in this shell")
 
 // routePrefix renames a bash builtin so the call reaches the registry command of the same
 // name instead. `help` always goes to the registry when it has one, so agents get our
-// command list instead of bash's builtin help. With file access disabled, bash's `cd` and
-// `pwd` have no directories to work with, so they go to a host that has its own (Godot's
-// res:// working directory, say).
+// command list instead of bash's builtin help. `cd` and `pwd` go to a host that has its
+// own working directory (Godot's res://, say), with or without file access; relative
+// shell paths then resolve against "/".
 const routePrefix = "\x00"
 
-// routedWithoutFiles are the builtins routed to the registry when file access is disabled.
-var routedWithoutFiles = []string{"cd", "pwd"}
+// hostRouted are the builtins routed to the registry when it has commands of those names.
+var hostRouted = []string{"cd", "pwd"}
 
 // pwdAlias is what the bash `pwd` builtin is renamed to otherwise. The builtin prints $PWD,
 // which on Windows holds the interpreter's backslash form ("\sub"), and `pwd -P` would
@@ -56,6 +58,9 @@ const pwdAlias = "\x00virtual-pwd"
 type Options struct {
 	// Root is a host directory exposed to scripts as "/". Empty disables file access.
 	Root string
+	// Hidden are top-level names under Root that scripts cannot see or touch, such as
+	// ".mcp-sh" (the shell's own config) and ".git". Matched case-insensitively.
+	Hidden []string
 	// Env is the initial environment ("KEY=value"). The server's own environment is
 	// never inherited.
 	Env []string
@@ -97,10 +102,10 @@ func Parse(script string) (*syntax.File, error) {
 }
 
 // Reserved reports whether name is a bash keyword or interpreter builtin, which a
-// registry command cannot override. `help` is exempt, and so are `cd` and `pwd` with file
-// access disabled: they are routed to the registry.
+// registry command cannot override. `help`, `cd` and `pwd` are exempt: they are routed to
+// the registry when it has them.
 func (e *Engine) Reserved(name string) bool {
-	if name == "help" || e.opts.Root == "" && slices.Contains(routedWithoutFiles, name) {
+	if name == "help" || slices.Contains(hostRouted, name) {
 		return false
 	}
 	return interp.IsBuiltin(name) || syntax.IsKeyword(name)
@@ -112,7 +117,7 @@ func (e *Engine) Run(ctx context.Context, script string, cmds engine.Registry, s
 		return 2, err
 	}
 
-	sb, err := newSandbox(e.opts.Root)
+	sb, err := newSandbox(e.opts.Root, e.opts.Hidden)
 	if err != nil {
 		return 1, err
 	}
@@ -121,7 +126,7 @@ func (e *Engine) Run(ctx context.Context, script string, cmds engine.Registry, s
 	runner, err := interp.New(
 		interp.Env(expand.ListEnviron(e.opts.Env...)),
 		interp.StdIO(stdio.Stdin, stdio.Stdout, stdio.Stderr),
-		interp.CallHandler(callHandler(cmds, sb.root != nil)),
+		interp.CallHandler(callHandler(cmds)),
 		interp.ExecHandlers(execMiddleware(cmds, sb)),
 		interp.OpenHandler(sb.open),
 		interp.StatHandler(sb.stat),
@@ -151,16 +156,11 @@ func (e *Engine) Run(ctx context.Context, script string, cmds engine.Registry, s
 	return 1, err
 }
 
-func callHandler(cmds engine.Registry, fileAccess bool) interp.CallHandlerFunc {
+func callHandler(cmds engine.Registry) interp.CallHandlerFunc {
 	routed := map[string]bool{}
-	if _, ok := cmds.Lookup("help"); ok {
-		routed["help"] = true
-	}
-	if !fileAccess {
-		for _, name := range routedWithoutFiles {
-			if _, ok := cmds.Lookup(name); ok {
-				routed[name] = true
-			}
+	for _, name := range append([]string{"help"}, hostRouted...) {
+		if _, ok := cmds.Lookup(name); ok {
+			routed[name] = true
 		}
 	}
 	return func(ctx context.Context, args []string) ([]string, error) {
@@ -203,7 +203,7 @@ func execMiddleware(cmds engine.Registry, sb *sandbox) func(interp.ExecHandlerFu
 				Resolve: func(p string) (string, error) { return resolve(dir, p) },
 			}
 			if sb.root != nil {
-				inv.FS = sb.root.FS()
+				inv.FS = hiddenFS{sb.root.FS(), sb.hidden}
 			}
 			code := cmd.Run(ctx, inv)
 			if code == 0 {
@@ -261,10 +261,11 @@ func resolve(dir, p string) (string, error) {
 }
 
 type sandbox struct {
-	root *os.Root // nil when file access is disabled
+	root   *os.Root // nil when file access is disabled
+	hidden []string // top-level names under root that do not exist for scripts
 }
 
-func newSandbox(dir string) (*sandbox, error) {
+func newSandbox(dir string, hidden []string) (*sandbox, error) {
 	if dir == "" {
 		return &sandbox{}, nil
 	}
@@ -272,7 +273,94 @@ func newSandbox(dir string) (*sandbox, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sandbox root: %w", err)
 	}
-	return &sandbox{root: root}, nil
+	return &sandbox{root: root, hidden: hidden}, nil
+}
+
+// isHidden reports whether rel (an fs.ValidPath) is a hidden name or inside one. The match
+// ignores case, as macOS and Windows filesystems do. It is lexical: a symlink already in
+// the folder that points into a hidden one is followed, but scripts cannot create one.
+func isHidden(hidden []string, rel string) bool {
+	first, _, _ := strings.Cut(rel, "/")
+	for _, h := range hidden {
+		if strings.EqualFold(first, h) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolve maps a shell path to a root-relative path, failing as "does not exist" for
+// hidden names.
+func (s *sandbox) resolve(ctx context.Context, op, p string) (string, error) {
+	rel, err := resolve(interp.HandlerCtx(ctx).Dir, p)
+	if err != nil {
+		return "", err
+	}
+	if isHidden(s.hidden, rel) {
+		return "", &fs.PathError{Op: op, Path: p, Err: fs.ErrNotExist}
+	}
+	return rel, nil
+}
+
+// withoutHidden drops hidden names from a listing of dir (root-relative).
+func withoutHidden(hidden []string, dir string, entries []fs.DirEntry) []fs.DirEntry {
+	if dir != "." || len(hidden) == 0 {
+		return entries
+	}
+	return slices.DeleteFunc(entries, func(e fs.DirEntry) bool { return isHidden(hidden, e.Name()) })
+}
+
+// hiddenFS is the sandbox root as builtins see it (Invocation.FS), with hidden names
+// removed.
+type hiddenFS struct {
+	fsys   fs.FS
+	hidden []string
+}
+
+func (h hiddenFS) Open(name string) (fs.File, error) {
+	if isHidden(h.hidden, name) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+	}
+	f, err := h.fsys.Open(name)
+	if err != nil || name != "." {
+		return f, err
+	}
+	if d, ok := f.(fs.ReadDirFile); ok {
+		return hiddenDir{d, h.hidden}, nil
+	}
+	return f, nil
+}
+
+func (h hiddenFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if isHidden(h.hidden, name) {
+		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrNotExist}
+	}
+	entries, err := fs.ReadDir(h.fsys, name)
+	return withoutHidden(h.hidden, name, entries), err
+}
+
+func (h hiddenFS) Stat(name string) (fs.FileInfo, error) {
+	if isHidden(h.hidden, name) {
+		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
+	}
+	return fs.Stat(h.fsys, name)
+}
+
+// hiddenDir is the opened root directory, listed without hidden names.
+type hiddenDir struct {
+	fs.ReadDirFile
+	hidden []string
+}
+
+func (d hiddenDir) ReadDir(n int) ([]fs.DirEntry, error) {
+	for {
+		entries, err := d.ReadDirFile.ReadDir(n)
+		entries = withoutHidden(d.hidden, ".", entries)
+		// A batch made only of hidden names must not look like the end of the listing.
+		if len(entries) > 0 || err != nil || n <= 0 {
+			return entries, err
+		}
+	}
 }
 
 func (s *sandbox) close() {
@@ -296,7 +384,7 @@ func (s *sandbox) open(ctx context.Context, p string, flag int, perm os.FileMode
 	if s.root == nil {
 		return nil, denied("open", p)
 	}
-	rel, err := resolve(interp.HandlerCtx(ctx).Dir, p)
+	rel, err := s.resolve(ctx, "open", p)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +399,7 @@ func (s *sandbox) stat(ctx context.Context, p string, followSymlinks bool) (fs.F
 		}
 		return nil, denied("stat", p)
 	}
-	rel, err := resolve(interp.HandlerCtx(ctx).Dir, p)
+	rel, err := s.resolve(ctx, "stat", p)
 	if err != nil {
 		return nil, err
 	}
@@ -327,11 +415,12 @@ func (s *sandbox) readDir(ctx context.Context, p string) ([]fs.DirEntry, error) 
 		// unquoted pattern like `jq .[]` still works instead of failing the command.
 		return nil, nil
 	}
-	rel, err := resolve(interp.HandlerCtx(ctx).Dir, p)
+	rel, err := s.resolve(ctx, "readdir", p)
 	if err != nil {
 		return nil, err
 	}
-	return fs.ReadDir(s.root.FS(), rel)
+	entries, err := fs.ReadDir(s.root.FS(), rel)
+	return withoutHidden(s.hidden, rel, entries), err
 }
 
 func (s *sandbox) access(ctx context.Context, p string, mode interp.AccessMode) error {

@@ -10,8 +10,10 @@
 // merge by name: giving any transport key (type, command, args, env, url, headers)
 // replaces the transport as a unit, while exec, defaults, hideTools and disabled
 // override individually, so pointing a built-in server at another command keeps its
-// mcp-sh options. Strings in host, mcpServers and root expand ${VAR} and
-// ${VAR:-default}.
+// mcp-sh options. Strings in host and mcpServers expand ${VAR} and ${VAR:-default}.
+//
+// The project is the nearest folder, from the working directory up, holding a .mcp-sh/
+// folder or one of Options.ProjectMarkers (the user config folder does not count).
 package profile
 
 import (
@@ -54,9 +56,11 @@ type Profile struct {
 	// folder. Entries from every layer stack.
 	CommandDirs []string `json:"commandDirs,omitempty"`
 
-	Root      string `json:"root,omitempty"`      // directory exposed to scripts as "/"; empty: no file access
-	Timeout   int    `json:"timeout,omitempty"`   // default script timeout, seconds
-	MaxOutput int    `json:"maxOutput,omitempty"` // per-stream output cap, bytes
+	// FileAccess exposes the project folder to the shell as "/" (redirects, globs, file
+	// operands). A pointer so a later layer can turn it back off.
+	FileAccess *bool `json:"fileAccess,omitempty"`
+	Timeout    int   `json:"timeout,omitempty"`   // default script timeout, seconds
+	MaxOutput  int   `json:"maxOutput,omitempty"` // per-stream output cap, bytes
 }
 
 // Host is a native mcp-sh host (the TCP host protocol), like the Godot bridge.
@@ -133,11 +137,31 @@ type Loaded struct {
 	CommandDirs []scripts.Dir
 	// ImageDir is where images from upstream tools are saved: <user config>/<app>/images.
 	ImageDir string
+	// ProjectDir is the project folder the project and local layers were looked up in.
+	ProjectDir string
+	// ProjectFound is false when no project was found and ProjectDir is just the working
+	// directory. File access is never given then.
+	ProjectFound bool
 }
 
+// FileAccessRoot is the folder the shell may use as "/", or "" when file access is off or
+// there is no project to give.
+func (l *Loaded) FileAccessRoot() string {
+	if l.Profile.FileAccessOn() && l.ProjectFound {
+		return l.ProjectDir
+	}
+	return ""
+}
+
+// FileAccessOn reports whether the merged config enables shell file access.
+func (p Profile) FileAccessOn() bool { return p.FileAccess != nil && *p.FileAccess }
+
 type Options struct {
-	ProjectDir string // where to look for .mcp-sh/; empty: the working directory
+	ProjectDir string // where to look for .mcp-sh/; empty: found from the working directory
 	ConfigDir  string // user config dir; empty: ConfigDir()
+	// ProjectMarkers are files or folders, besides .mcp-sh/, that mark a project folder,
+	// such as "project.godot".
+	ProjectMarkers []string
 }
 
 // ConfigDir is the user-level config folder shared by all apps:
@@ -161,11 +185,55 @@ func (o Options) configDir() string {
 }
 
 func (o Options) projectDir() string {
+	dir, _ := o.project()
+	return dir
+}
+
+// project is the project folder, and whether one was found rather than defaulted to the
+// working directory. An explicit ProjectDir counts as found.
+func (o Options) project() (string, bool) {
 	if o.ProjectDir != "" {
-		return o.ProjectDir
+		if abs, err := filepath.Abs(o.ProjectDir); err == nil {
+			return abs, true
+		}
+		return o.ProjectDir, true
 	}
-	wd, _ := os.Getwd()
-	return wd
+	wd, err := os.Getwd()
+	if err != nil {
+		return ".", false
+	}
+	return FindProject(wd, o)
+}
+
+// FindProject returns the nearest folder, from start up, holding a .mcp-sh/ folder or one
+// of o.ProjectMarkers, and true; or start itself and false when there is none. The user
+// config folder (usually ~/.mcp-sh) is not a project's .mcp-sh/, so the home folder is not
+// taken for a project.
+func FindProject(start string, o Options) (string, bool) {
+	start, err := filepath.Abs(start)
+	if err != nil {
+		return start, false
+	}
+	userDir := o.configDir()
+	for d := start; ; d = filepath.Dir(d) {
+		if dot := filepath.Join(d, ".mcp-sh"); dirExists(dot) && !sameDir(dot, userDir) {
+			return d, true
+		}
+		for _, m := range o.ProjectMarkers {
+			if _, err := os.Stat(filepath.Join(d, m)); err == nil {
+				return d, true
+			}
+		}
+		if filepath.Dir(d) == d {
+			return start, false
+		}
+	}
+}
+
+// ProjectMarkersText describes what marks a project, for messages: ".mcp-sh/ folder or
+// project.godot".
+func (o Options) ProjectMarkersText() string {
+	return strings.Join(append([]string{".mcp-sh/ folder"}, o.ProjectMarkers...), " or ")
 }
 
 var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
@@ -226,6 +294,7 @@ func Load(app App, o Options) (*Loaded, error) {
 		return nil, fmt.Errorf("no config for %s: expected %s", app.Name, layers[1].Path)
 	}
 	l := &Loaded{Name: app.Name, Layers: layers, ImageDir: filepath.Join(o.configDir(), app.Name, "images")}
+	l.ProjectDir, l.ProjectFound = o.project()
 	for i := range layers {
 		layer := &layers[i]
 		if !layer.Exists {
@@ -343,7 +412,10 @@ func merge(base, layer *Profile) {
 	str(&base.Title, layer.Title)
 	str(&base.Instructions, layer.Instructions)
 	str(&base.Setup, layer.Setup)
-	str(&base.Root, layer.Root)
+	if layer.FileAccess != nil {
+		v := *layer.FileAccess
+		base.FileAccess = &v
+	}
 	base.CommandDirs = append(base.CommandDirs, layer.CommandDirs...)
 	if layer.Timeout != 0 {
 		base.Timeout = layer.Timeout
@@ -481,7 +553,6 @@ func expand(p Profile) Profile {
 		h.Address, h.Token = ExpandVars(h.Address), ExpandVars(h.Token)
 		out.Host = &h
 	}
-	out.Root = ExpandVars(p.Root)
 	if p.MCPServers != nil {
 		out.MCPServers = make(map[string]*Server, len(p.MCPServers))
 		for name, s := range p.MCPServers {

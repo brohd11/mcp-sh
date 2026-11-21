@@ -440,3 +440,77 @@ func TestLocalLayer(t *testing.T) {
 		t.Error("project folder got a .gitignore")
 	}
 }
+
+func TestFindProject(t *testing.T) {
+	tmp := t.TempDir()
+	o := profile.Options{ConfigDir: filepath.Join(tmp, "home", ".mcp-sh")}
+	check := func(name, start string, o profile.Options, want string, wantFound bool) {
+		t.Helper()
+		if got, found := profile.FindProject(start, o); got != want || found != wantFound {
+			t.Errorf("%s: got %s %v, want %s %v", name, got, found, want, wantFound)
+		}
+	}
+
+	// The nearest .mcp-sh/ folder, from deeper in the project.
+	os.MkdirAll(filepath.Join(tmp, "proj", ".mcp-sh"), 0o755)
+	deep := filepath.Join(tmp, "proj", "a", "b")
+	os.MkdirAll(deep, 0o755)
+	check(".mcp-sh marker", deep, o, filepath.Join(tmp, "proj"), true)
+
+	// An app marker, such as project.godot.
+	scenes := filepath.Join(tmp, "game", "scenes")
+	os.MkdirAll(scenes, 0o755)
+	write(t, filepath.Join(tmp, "game", "project.godot"), "")
+	check("no markers", scenes, o, scenes, false)
+	godot := o
+	godot.ProjectMarkers = []string{"project.godot"}
+	check("project.godot marker", scenes, godot, filepath.Join(tmp, "game"), true)
+
+	// The user config folder does not make the home folder a project.
+	work := filepath.Join(tmp, "home", "work")
+	os.MkdirAll(o.ConfigDir, 0o755)
+	os.MkdirAll(work, 0o755)
+	check("user config folder", work, o, work, false)
+	check("home itself", filepath.Join(tmp, "home"), o, filepath.Join(tmp, "home"), false)
+}
+
+func TestFileAccess(t *testing.T) {
+	o := opts(t)
+	app := profile.App{Name: "godot"}
+	user, project := profile.UserConfigPath("godot", o), profile.ProjectConfigPath("godot", o)
+
+	write(t, user, `{"title": "x"}`)
+	l, err := profile.Load(app, o)
+	if err != nil || l.Profile.FileAccessOn() || l.ProjectDir != o.ProjectDir {
+		t.Fatalf("default: on=%v dir=%s err=%v", l.Profile.FileAccessOn(), l.ProjectDir, err)
+	}
+	if err := profile.SetFileAccess(project, true); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := profile.Load(app, o); !l.Profile.FileAccessOn() || l.FileAccessRoot() != o.ProjectDir || !profile.HasFileAccess(project) || profile.HasFileAccess(user) {
+		t.Fatalf("project enables: %+v", l.Profile.FileAccess)
+	}
+	// Without a project (only the working directory), no folder is given.
+	bare := t.TempDir()
+	t.Chdir(bare)
+	noProject := profile.Options{ConfigDir: o.ConfigDir}
+	write(t, user, `{"fileAccess": true}`)
+	if l, err := profile.Load(app, noProject); err != nil || !l.Profile.FileAccessOn() || l.ProjectFound || l.ProjectDir != bare || l.FileAccessRoot() != "" {
+		t.Fatalf("no project: found=%v dir=%s root=%q err=%v", l.ProjectFound, l.ProjectDir, l.FileAccessRoot(), err)
+	}
+	write(t, user, `{"title": "x"}`)
+	// A later layer's false wins.
+	if err := profile.SetFileAccess(profile.LocalConfigPath("godot", o), false); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := profile.Load(app, o); l.Profile.FileAccessOn() {
+		t.Fatal("local false should turn it off")
+	}
+	if _, err := profile.Load(app, o); err != nil {
+		t.Fatal(err)
+	}
+	write(t, user, `{"root": "/tmp"}`)
+	if _, err := profile.Load(app, o); err == nil || !strings.Contains(err.Error(), "root") {
+		t.Fatalf("root is no longer a key: %v", err)
+	}
+}
