@@ -77,7 +77,7 @@ type Config struct {
 
 // Registration is an extra MCP server entry for the same binary.
 type Registration struct {
-	Suffix string            // appended to the server name: "-game" -> mcp-sh-godot-game
+	Suffix string            // appended to the server name: "_game" -> mcp_sh_godot_game
 	Env    map[string]string // environment for that entry
 	Label  string            // shown as a trailing comment, e.g. "running game"
 }
