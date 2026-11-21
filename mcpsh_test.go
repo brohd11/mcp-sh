@@ -189,7 +189,7 @@ pid1=$(blender-mcp get_scene_info | jq .pid); pid2=$(blender-mcp get_scene_info 
 	}
 
 	out, _, _ = e.run("", "commands")
-	for _, s := range []string{"Sources:\n  blender-mcp (", ": 1 commands", "script commands (3 folders): 2 commands", "MCP server, 2 tools: execute_blender_code, get_scene_info", "  mine     my command", "  objects  list scene objects"} {
+	for _, s := range []string{"Sources:\n  blender-mcp MCP server (", ": 1 commands", "script commands (3 folders): 2 commands", "MCP server, 2 tools: execute_blender_code, get_scene_info", "  mine     my command", "  objects  list scene objects"} {
 		if !strings.Contains(out, s) {
 			t.Errorf("commands: missing %q in\n%s", s, out)
 		}

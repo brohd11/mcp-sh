@@ -98,11 +98,11 @@ func (s *Server) Name() string { return s.cfg.Name }
 func (s *Server) Label() string {
 	switch {
 	case s.cfg.URL != "":
-		return fmt.Sprintf("%s (%s)", s.cfg.Name, s.cfg.URL)
+		return fmt.Sprintf("%s MCP server (%s)", s.cfg.Name, s.cfg.URL)
 	case s.cfg.Command != "":
-		return fmt.Sprintf("%s (%s)", s.cfg.Name, strings.TrimSpace(s.cfg.Command+" "+strings.Join(s.cfg.Args, " ")))
+		return fmt.Sprintf("%s MCP server (%s)", s.cfg.Name, strings.TrimSpace(s.cfg.Command+" "+strings.Join(s.cfg.Args, " ")))
 	}
-	return s.cfg.Name
+	return s.cfg.Name + " MCP server"
 }
 
 func (s *Server) newTransport() (mcp.Transport, error) {
