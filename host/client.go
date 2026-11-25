@@ -65,12 +65,26 @@ func (c *Client) Commands(ctx context.Context) ([]engine.Command, error) {
 	if err != nil {
 		return nil, err
 	}
-	label := strings.TrimSpace(hello.Name + " " + hello.Version)
+	label := HelloLabel(hello)
 	c.mu.Lock()
 	c.label = label
 	c.mu.Unlock()
 	return c.CommandsFrom(hello), nil
 }
+
+// HelloLabel is the host's name and version from a hello, e.g. "godot editor 4.5, bridge 0.1.5".
+func HelloLabel(hello HelloResult) string {
+	return strings.TrimSpace(hello.Name + " " + hello.Version)
+}
+
+// ConnectError is returned when nothing answers at the host's address.
+type ConnectError struct {
+	msg string
+	Err error
+}
+
+func (e *ConnectError) Error() string { return e.msg }
+func (e *ConnectError) Unwrap() error { return e.Err }
 
 func (c *Client) Hello(ctx context.Context) (HelloResult, error) {
 	resp, err := c.roundTrip(ctx, Request{Method: MethodHello, Protocol: ProtocolVersion})
@@ -182,7 +196,7 @@ func (c *Client) roundTrip(ctx context.Context, req Request) (Response, error) {
 		if c.Hint != "" {
 			msg += "\n(" + c.Hint + ")"
 		}
-		return Response{}, fmt.Errorf("%s", msg)
+		return Response{}, &ConnectError{msg: msg, Err: err}
 	}
 	defer conn.Close()
 	if deadline, ok := ctx.Deadline(); ok {

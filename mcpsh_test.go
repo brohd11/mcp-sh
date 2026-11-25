@@ -350,13 +350,37 @@ func TestSetup(t *testing.T) {
 	}
 }
 
+func TestVersion(t *testing.T) {
+	e := newEnv(t)
+	e.cfg.VersionDetail = "plugin 0.2.3"
+	// No config: only the binary's line.
+	if out, _, code := e.run("", "--version"); code != 0 || out != "test-shell v1.2.3 (plugin 0.2.3)\n" {
+		t.Fatalf("no config: %d %q", code, out)
+	}
+	h := &hosttest.Host{Name: "godot editor", Version: "4.5.stable, bridge 0.1.5, mcp-sh-godot 0.2.4", Token: "secret"}
+	addr, err := h.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	e.builtin(`{"host": {"address": "` + addr + `", "token": "secret"}}`)
+	want := "test-shell v1.2.3 (plugin 0.2.3)\nconnected: godot editor 4.5.stable, bridge 0.1.5, mcp-sh-godot 0.2.4 (" + addr + ")\n"
+	if out, _, code := e.run("", "version"); code != 0 || out != want {
+		t.Fatalf("connected: %d %q", code, out)
+	}
+	e.builtin(`{"host": {"address": "` + addr + `", "token": "wrong"}}`)
+	if out, _, code := e.run("", "--version"); code != 0 || !strings.HasSuffix(out, "connected: "+addr+": host error: Unauthorized\n") {
+		t.Fatalf("unauthorized: %d %q", code, out)
+	}
+}
+
 func TestCLIErrors(t *testing.T) {
 	e := newEnv(t)
 	if _, errOut, code := e.run("", "run", "true"); code != 2 || !strings.Contains(errOut, "no config for test: expected "+profile.UserConfigPath("test", e.opts)) {
 		t.Fatalf("no config: %q", errOut)
 	}
 	e.builtin(`{"host": {"address": "127.0.0.1:1"}}`)
-	if out, _, _ := e.run("", "--version"); out != "v1.2.3\n" {
+	if out, _, _ := e.run("", "--version"); out != "test-shell v1.2.3\nconnected: none at 127.0.0.1:1\n" {
 		t.Fatalf("version: %q", out)
 	}
 	if out, _, _ := e.run("", "--help"); !strings.Contains(out, "Register the server with:\n  Claude Code:\n    claude mcp add -s user test-shell -- ") || !strings.Contains(out, "codex mcp add test-shell -- ") {

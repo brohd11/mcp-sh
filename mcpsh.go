@@ -17,6 +17,7 @@ package mcpsh
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -34,6 +35,7 @@ import (
 	"github.com/brohd11/mcp-sh/builtins"
 	"github.com/brohd11/mcp-sh/engine"
 	"github.com/brohd11/mcp-sh/engine/shengine"
+	"github.com/brohd11/mcp-sh/host"
 	"github.com/brohd11/mcp-sh/mcpserver"
 	"github.com/brohd11/mcp-sh/profile"
 	"github.com/brohd11/mcp-sh/shell"
@@ -59,6 +61,9 @@ type Config struct {
 	Name    string // binary and MCP server name, e.g. "mcp-sh-blender"
 	App     string // config folder name, e.g. "blender" for ~/.mcp-sh/blender/ (default: Name)
 	Version string
+	// VersionDetail is shown in parentheses after Version by --version, e.g. the version
+	// of a plugin the binary carries.
+	VersionDetail string
 	// UpdateRepo ("owner/repo") enables `update` via GitHub releases.
 	UpdateRepo string
 	// FS is the built-in config layer: config.json and an optional commands/ folder,
@@ -114,7 +119,7 @@ func run(cfg Config, args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		c.printf("%s", c.helpText())
 		return 0
 	case "--version", "version":
-		c.printf("%s\n", cfg.Version)
+		c.version()
 		return 0
 	case "update":
 		if cfg.UpdateRepo == "" {
@@ -148,6 +153,37 @@ func run(cfg Config, args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	}
 	c.eprintf("unknown command %q\nRun %s --help for usage.\n", sub, cfg.Name)
 	return 2
+}
+
+// version prints the binary's version, then probes the configured host: which program
+// answers on its address, and the versions it reports.
+func (c *cli) version() {
+	line := c.cfg.Name + " " + c.cfg.Version
+	if c.cfg.VersionDetail != "" {
+		line += " (" + c.cfg.VersionDetail + ")"
+	}
+	c.printf("%s\n", line)
+	l, err := profile.Load(profile.App{Name: c.cfg.App, FS: c.cfg.FS}, c.cfg.Options)
+	if err != nil {
+		return
+	}
+	h := l.Profile.Host
+	if h == nil || h.Disabled || h.Address == "" {
+		return
+	}
+	client := &host.Client{Addr: h.Address, Token: h.Token, DialTimeout: time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	hello, err := client.Hello(ctx)
+	var connErr *host.ConnectError
+	switch {
+	case errors.As(err, &connErr):
+		c.printf("connected: none at %s\n", h.Address)
+	case err != nil:
+		c.printf("connected: %s: %v\n", h.Address, err)
+	default:
+		c.printf("connected: %s (%s)\n", host.HelloLabel(hello), h.Address)
+	}
 }
 
 func (c *cli) helpText() string {
